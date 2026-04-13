@@ -45,7 +45,7 @@ def test_required_files_exist() -> None:
 
 
 def _public_names(path: Path) -> set[str]:
-    """Return top-level assigned names matching CONF_*, DEFAULT_*, SERVICE_*, PLATFORMS."""
+    """Return top-level assigned names matching shared prefixes."""
     tree = ast.parse(path.read_text())
     names: set[str] = set()
     for node in ast.iter_child_nodes(tree):
@@ -53,9 +53,12 @@ def _public_names(path: Path) -> set[str]:
             for target in node.targets:
                 if isinstance(target, ast.Name) and _is_shared_name(target.id):
                     names.add(target.id)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if _is_shared_name(node.target.id):
-                names.add(node.target.id)
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and _is_shared_name(node.target.id)
+        ):
+            names.add(node.target.id)
     return names
 
 
@@ -78,9 +81,12 @@ def _imported_names(path: Path) -> set[str]:
             for target in node.targets:
                 if isinstance(target, ast.Name) and _is_shared_name(target.id):
                     names.add(target.id)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if _is_shared_name(node.target.id):
-                names.add(node.target.id)
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and _is_shared_name(node.target.id)
+        ):
+            names.add(node.target.id)
     return names
 
 
@@ -165,7 +171,11 @@ def _file_imports_from(path: Path, module_fragment: str) -> set[str]:
     tree = ast.parse(path.read_text())
     names: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and module_fragment in node.module:
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and module_fragment in node.module
+        ):
             for alias in node.names:
                 names.add(alias.asname if alias.asname else alias.name)
     return names

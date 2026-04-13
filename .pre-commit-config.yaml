@@ -21,4 +21,4 @@ repos:
     rev: v1.20.0
     hooks:
       - id: mypy
-        additional_dependencies: [types-requests, responses, pytest, homeassistant, voluptuous]
+        additional_dependencies: [types-requests, types-PyYAML, responses, pytest, homeassistant, voluptuous]
