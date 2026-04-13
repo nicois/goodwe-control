@@ -140,9 +140,7 @@ async def _register_card_frontend(hass: HomeAssistant) -> None:
     await hass.http.async_register_static_paths(static_paths)
 
     try:
-        raw = await hass.async_add_executor_job(
-            (card_dir / "manifest.json").read_text
-        )
+        raw = await hass.async_add_executor_job((card_dir / "manifest.json").read_text)
         manifest = json.loads(raw)
         version = manifest.get("version", "0")
     except Exception:
