@@ -54,15 +54,11 @@ class TaperProfile:
 
     # -- Recording ----------------------------------------------------------
 
-    def record_charge(
-        self, soc: float, requested_w: int, actual_w: float
-    ) -> None:
+    def record_charge(self, soc: float, requested_w: int, actual_w: float) -> None:
         """Record a charge taper observation."""
         self._record(self.charge, soc, requested_w, actual_w)
 
-    def record_discharge(
-        self, soc: float, requested_w: int, actual_w: float
-    ) -> None:
+    def record_discharge(self, soc: float, requested_w: int, actual_w: float) -> None:
         """Record a discharge taper observation."""
         self._record(self.discharge, soc, requested_w, actual_w)
 
@@ -197,12 +193,9 @@ class TaperProfile:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict for HA Store."""
         return {
-            "charge": {
-                str(k): [b.ratio, b.count] for k, b in self.charge.items()
-            },
+            "charge": {str(k): [b.ratio, b.count] for k, b in self.charge.items()},
             "discharge": {
-                str(k): [b.ratio, b.count]
-                for k, b in self.discharge.items()
+                str(k): [b.ratio, b.count] for k, b in self.discharge.items()
             },
         }
 
