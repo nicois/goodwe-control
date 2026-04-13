@@ -1,3 +1,8 @@
+## 1.0.0-beta.6
+
+- Fix pre-commit CI (ruff lint, mypy types-PyYAML)
+- Add CHANGELOG, README, brand icon for HACS validation
+
 ## 1.0.0-beta.5
 
 Initial release of GoodWe Battery Control — smart battery management for
