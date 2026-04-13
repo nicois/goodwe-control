@@ -1,3 +1,14 @@
+## 1.0.0-beta.13
+
+### Added
+- **Lovelace cards**: control card (`custom:goodwe-control-card`) and overview card (`custom:goodwe-overview-card`) with auto-discovery via WebSocket entity map
+- **Full i18n support** (10 languages): English, German, French, Dutch, Spanish, Italian, Polish, Portuguese, Simplified Chinese, Japanese — entity names, service descriptions, config UI, and card labels
+- **Adaptive BMS taper model**: learns actual charge/discharge acceptance at each SoC level, improving time estimates and power pacing at high/low SoC
+
+### Changed
+- Smart charge/discharge service descriptions now accurately describe rate pacing and deferred start behaviour
+- Synced smart_battery library with canonical source (enum state keys, taper formatting)
+
 ## 1.0.0-beta.6
 
 - Fix pre-commit CI (ruff lint, mypy types-PyYAML)

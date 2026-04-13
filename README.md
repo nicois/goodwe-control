@@ -380,6 +380,89 @@ series:
     stroke_dash: 4
 ```
 
+### Dashboard card
+
+The integration includes a custom Lovelace card that automatically displays the current smart operation status with a battery gauge, progress indicators, and a SoC forecast sparkline. When no smart operation is active, the card shows an idle state.
+
+The card is auto-registered as a Lovelace resource when the integration loads (storage mode dashboards). No manual resource setup is needed.
+
+```yaml
+type: custom:goodwe-control-card
+```
+
+That's it — no configuration required. The card auto-discovers the `sensor.goodwe_smart_operations`, `sensor.goodwe_battery_forecast`, and `sensor.goodwe_battery_soc` entities.
+
+**What the card shows:**
+
+- **Header**: Battery SoC gauge with colour-coded fill (green/orange/red by level)
+- **Smart Charge** (green section): Time window, power, target SoC with progress bar, remaining time badge. Shows "Charge Scheduled" with a dim indicator when deferred, "Smart Charge" with a pulsing dot when actively charging.
+- **Smart Discharge** (orange section): Time window, power, min SoC, feed-in energy limit. Shows "Discharge Scheduled" before the window opens.
+- **Idle**: Clean message when no smart operation is active.
+- **Forecast**: SVG sparkline of projected SoC with time axis labels and a "now" marker. Y-axis scales to fit the data range.
+
+To override the default entity IDs (e.g. if you renamed them):
+
+```yaml
+type: custom:goodwe-control-card
+operations_entity: sensor.goodwe_smart_operations
+forecast_entity: sensor.goodwe_battery_forecast
+soc_entity: sensor.goodwe_battery_soc
+```
+
+### Overview card
+
+A second built-in card shows live energy flows between solar, battery, grid and house in a 2×2 layout.
+
+```yaml
+type: custom:goodwe-overview-card
+```
+
+No configuration required — all entities are auto-discovered via a WebSocket endpoint. The card shows:
+
+- **Solar**: Total solar power
+- **House**: Household consumption
+- **Grid**: Import/export power with direction indicator
+- **Battery**: SoC gauge, charge/discharge rate with direction indicator, temperature, residual energy
+- **Work mode**: Current inverter work mode badge in the header
+
+To override the default entity IDs:
+
+```yaml
+type: custom:goodwe-overview-card
+solar_entity: sensor.goodwe_solar_power
+house_entity: sensor.goodwe_house_load
+soc_entity: sensor.goodwe_battery_soc
+```
+
+> **YAML mode dashboards:** If you use YAML-mode Lovelace (not the default storage mode), add the resources manually to your `configuration.yaml`:
+> ```yaml
+> lovelace:
+>   resources:
+>     - url: /goodwe_battery_control/goodwe-control-card.js
+>       type: module
+>     - url: /goodwe_battery_control/goodwe-overview-card.js
+>       type: module
+> ```
+
+## Supported languages
+
+The integration UI — entity names, service descriptions, config options, and both Lovelace cards — is fully translated into the following languages:
+
+| Language | Code |
+|---|---|
+| English | `en` |
+| German | `de` |
+| French | `fr` |
+| Dutch | `nl` |
+| Spanish | `es` |
+| Italian | `it` |
+| Polish | `pl` |
+| Portuguese | `pt` |
+| Simplified Chinese | `zh-Hans` |
+| Japanese | `ja` |
+
+Home Assistant automatically selects the language based on the user's profile language setting. Lovelace cards use `hass.language` for card-level UI elements (labels, durations, status text).
+
 ## Binary sensors
 
 The integration creates two binary sensors that track whether a smart charge or smart discharge session is currently active:
