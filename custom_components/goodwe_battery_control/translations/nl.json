@@ -1,0 +1,67 @@
+{
+  "entity": {
+    "sensor": {
+      "override_status": {
+        "name": "Status"
+      },
+      "smart_operations": {
+        "name": "Slimme bewerkingen",
+        "state": {
+          "idle": "Inactief",
+          "charging": "Laden",
+          "deferred": "Uitgesteld",
+          "target_reached": "Doel bereikt",
+          "discharging": "Ontladen",
+          "discharge_scheduled": "Ontladen gepland",
+          "discharge_suspended": "Gepauzeerd",
+          "charge_discharge_active": "Laden + Ontladen"
+        }
+      },
+      "charge_power": {
+        "name": "Slim laadvermogen"
+      },
+      "charge_window": {
+        "name": "Laadvenster"
+      },
+      "charge_remaining": {
+        "name": "Laden resterend"
+      },
+      "discharge_power": {
+        "name": "Slim ontlaadvermogen"
+      },
+      "discharge_window": {
+        "name": "Ontlaadvenster"
+      },
+      "discharge_remaining": {
+        "name": "Ontladen resterend"
+      },
+      "battery_forecast": {
+        "name": "Batterijvoorspelling"
+      }
+    },
+    "binary_sensor": {
+      "smart_charge_active": {
+        "name": "Slim laden actief"
+      },
+      "smart_discharge_active": {
+        "name": "Slim ontladen actief"
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "GoodWe Control",
+        "description": "Voer uw GoodWe Cloud API-inloggegevens in.",
+        "data": {
+          "api_key": "API-sleutel",
+          "device_serial": "Serienummer apparaat"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kan geen verbinding maken met de GoodWe Cloud API. Controleer uw netwerkverbinding.",
+      "invalid_auth": "Authenticatie mislukt. Controleer uw API-sleutel en serienummer."
+    }
+  }
+}

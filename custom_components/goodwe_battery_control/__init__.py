@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+import voluptuous as vol
 from homeassistant.helpers.storage import Store
 
 from .const import (
@@ -52,6 +53,137 @@ _GOODWE_MODE_MAP: dict[WorkMode, str] = {
 }
 
 
+_ENTITY_ROLES: dict[str, str] = {
+    "smart_operations": "smart_operations",
+    "battery_forecast": "battery_forecast",
+}
+
+_CARD_URLS = [
+    f"/{DOMAIN}/goodwe-control-card.js",
+    f"/{DOMAIN}/goodwe-overview-card.js",
+]
+
+
+def _register_websocket_api(hass: HomeAssistant) -> None:
+    """Register WebSocket commands for Lovelace card entity discovery."""
+    from homeassistant.components.websocket_api import (  # type: ignore[attr-defined]
+        async_register_command,
+        async_response,
+        websocket_command,
+    )
+    from homeassistant.helpers import entity_registry as er
+
+    @websocket_command({vol.Required("type"): f"{DOMAIN}/entity_map"})
+    @async_response
+    async def ws_entity_map(
+        hass: HomeAssistant,
+        connection: Any,
+        msg: dict[str, Any],
+    ) -> None:
+        """Return a role->entity_id mapping for goodwe_battery_control entities."""
+        registry = er.async_get(hass)
+        entry_id: str | None = None
+        for key in hass.data.get(DOMAIN, {}):
+            if not str(key).startswith("_"):
+                entry_id = key
+                break
+
+        result: dict[str, str] = {}
+        if entry_id is not None:
+            entries = er.async_entries_for_config_entry(registry, entry_id)
+            suffix_map: dict[str, str] = {}
+            for ent in entries:
+                for suffix in _ENTITY_ROLES.values():
+                    if ent.unique_id.endswith(f"_{suffix}"):
+                        suffix_map[suffix] = ent.entity_id
+                        break
+            for role, suffix in _ENTITY_ROLES.items():
+                if suffix in suffix_map:
+                    result[role] = suffix_map[suffix]
+
+            # Also expose user-configured entities from the coordinator
+            domain_data = hass.data.get(DOMAIN, {})
+            entry_data = domain_data.get(entry_id, {})
+            coordinator = entry_data.get("coordinator")
+            if coordinator is not None:
+                emap = getattr(coordinator, "_entity_map", {})
+                role_from_key = {
+                    "soc_entity": "battery_soc",
+                    "loads_power_entity": "house_load",
+                    "pv_power_entity": "solar_power",
+                }
+                for key, role in role_from_key.items():
+                    eid = emap.get(key)
+                    if eid:
+                        result[role] = eid
+
+        connection.send_result(msg["id"], result)
+
+    async_register_command(hass, ws_entity_map)
+
+
+async def _register_card_frontend(hass: HomeAssistant) -> None:
+    """Serve the custom Lovelace card JS files and register them as resources."""
+    import json
+    from pathlib import Path
+
+    from homeassistant.components.http import StaticPathConfig
+
+    card_dir = Path(__file__).parent
+    static_paths = []
+    for card_url in _CARD_URLS:
+        filename = card_url.rsplit("/", 1)[-1]
+        card_path = card_dir / "www" / filename
+        static_paths.append(
+            StaticPathConfig(card_url, str(card_path), cache_headers=True)
+        )
+    await hass.http.async_register_static_paths(static_paths)
+
+    try:
+        raw = await hass.async_add_executor_job(
+            (card_dir / "manifest.json").read_text
+        )
+        manifest = json.loads(raw)
+        version = manifest.get("version", "0")
+    except Exception:
+        version = "0"
+
+    try:
+        import importlib
+
+        _ll_mod = importlib.import_module("homeassistant.components.lovelace")
+        LOVELACE_DATA = _ll_mod.LOVELACE_DATA
+
+        ll_data = hass.data.get(LOVELACE_DATA)
+        if ll_data is not None and hasattr(ll_data.resources, "async_create_item"):
+            for card_url in _CARD_URLS:
+                versioned_url = f"{card_url}?v={version}"
+                existing = [
+                    r
+                    for r in ll_data.resources.async_items()
+                    if card_url in r.get("url", "")
+                ]
+                for r in existing:
+                    if r.get("url") != versioned_url:
+                        await ll_data.resources.async_delete_item(r["id"])
+                current = [
+                    r
+                    for r in ll_data.resources.async_items()
+                    if r.get("url") == versioned_url
+                ]
+                if not current:
+                    await ll_data.resources.async_create_item(
+                        {"res_type": "module", "url": versioned_url}
+                    )
+                    _LOGGER.info("Registered Lovelace resource: %s", versioned_url)
+    except Exception:
+        _LOGGER.debug(
+            "Could not auto-register Lovelace resources; "
+            "add them manually as module resources",
+            exc_info=True,
+        )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up GoodWe Battery Control from a config entry."""
     hass.data.setdefault(DOMAIN, {})
@@ -93,10 +225,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "entry": entry,
     }
 
-    # Register services once (first real entry)
+    # Register services, frontend card, and WS API once (first real entry)
     real_entries = {k for k in hass.data[DOMAIN] if not k.startswith("_")}
     if len(real_entries) == 1:
         register_services(hass, DOMAIN, adapter)
+        _register_websocket_api(hass)
+        await _register_card_frontend(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

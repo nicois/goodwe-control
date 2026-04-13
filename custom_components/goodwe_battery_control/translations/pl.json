@@ -1,0 +1,67 @@
+{
+  "entity": {
+    "sensor": {
+      "override_status": {
+        "name": "Status"
+      },
+      "smart_operations": {
+        "name": "Inteligentne operacje",
+        "state": {
+          "idle": "Bezczynny",
+          "charging": "Ładowanie",
+          "deferred": "Odroczone",
+          "target_reached": "Cel osiągnięty",
+          "discharging": "Rozładowywanie",
+          "discharge_scheduled": "Rozładowanie zaplanowane",
+          "discharge_suspended": "Wstrzymane",
+          "charge_discharge_active": "Ładowanie + Rozładowywanie"
+        }
+      },
+      "charge_power": {
+        "name": "Moc ładowania (Smart)"
+      },
+      "charge_window": {
+        "name": "Okno ładowania"
+      },
+      "charge_remaining": {
+        "name": "Ładowanie pozostałe"
+      },
+      "discharge_power": {
+        "name": "Moc rozładowania (Smart)"
+      },
+      "discharge_window": {
+        "name": "Okno rozładowania"
+      },
+      "discharge_remaining": {
+        "name": "Rozładowanie pozostałe"
+      },
+      "battery_forecast": {
+        "name": "Prognoza baterii"
+      }
+    },
+    "binary_sensor": {
+      "smart_charge_active": {
+        "name": "Inteligentne ładowanie aktywne"
+      },
+      "smart_discharge_active": {
+        "name": "Inteligentne rozładowanie aktywne"
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "GoodWe Control",
+        "description": "Wprowadź dane uwierzytelniające API GoodWe Cloud.",
+        "data": {
+          "api_key": "Klucz API",
+          "device_serial": "Numer seryjny urządzenia"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nie można połączyć się z API GoodWe Cloud. Sprawdź połączenie sieciowe.",
+      "invalid_auth": "Uwierzytelnianie nie powiodło się. Sprawdź klucz API i numer seryjny urządzenia."
+    }
+  }
+}

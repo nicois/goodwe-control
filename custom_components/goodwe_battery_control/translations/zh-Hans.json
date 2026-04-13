@@ -1,0 +1,67 @@
+{
+  "entity": {
+    "sensor": {
+      "override_status": {
+        "name": "状态"
+      },
+      "smart_operations": {
+        "name": "智能运行",
+        "state": {
+          "idle": "空闲",
+          "charging": "充电中",
+          "deferred": "延迟中",
+          "target_reached": "已达目标",
+          "discharging": "放电中",
+          "discharge_scheduled": "放电已计划",
+          "discharge_suspended": "放电暂停",
+          "charge_discharge_active": "充电 + 放电"
+        }
+      },
+      "charge_power": {
+        "name": "智能充电功率"
+      },
+      "charge_window": {
+        "name": "充电时段"
+      },
+      "charge_remaining": {
+        "name": "充电剩余时间"
+      },
+      "discharge_power": {
+        "name": "智能放电功率"
+      },
+      "discharge_window": {
+        "name": "放电时段"
+      },
+      "discharge_remaining": {
+        "name": "放电剩余时间"
+      },
+      "battery_forecast": {
+        "name": "电池预测"
+      }
+    },
+    "binary_sensor": {
+      "smart_charge_active": {
+        "name": "智能充电进行中"
+      },
+      "smart_discharge_active": {
+        "name": "智能放电进行中"
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "GoodWe Control",
+        "description": "输入您的 GoodWe Cloud API 凭据。",
+        "data": {
+          "api_key": "API 密钥",
+          "device_serial": "设备序列号"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接到 GoodWe Cloud API。请检查您的网络连接。",
+      "invalid_auth": "认证失败。请检查您的 API 密钥和设备序列号。"
+    }
+  }
+}

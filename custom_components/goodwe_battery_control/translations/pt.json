@@ -1,0 +1,67 @@
+{
+  "entity": {
+    "sensor": {
+      "override_status": {
+        "name": "Estado"
+      },
+      "smart_operations": {
+        "name": "Operações inteligentes",
+        "state": {
+          "idle": "Inativo",
+          "charging": "Carregando",
+          "deferred": "Adiada",
+          "target_reached": "Meta atingida",
+          "discharging": "Descarregando",
+          "discharge_scheduled": "Descarga agendada",
+          "discharge_suspended": "Suspensa",
+          "charge_discharge_active": "Carga + Descarga"
+        }
+      },
+      "charge_power": {
+        "name": "Potência de carga (Smart)"
+      },
+      "charge_window": {
+        "name": "Janela de carga"
+      },
+      "charge_remaining": {
+        "name": "Carga restante"
+      },
+      "discharge_power": {
+        "name": "Potência de descarga (Smart)"
+      },
+      "discharge_window": {
+        "name": "Janela de descarga"
+      },
+      "discharge_remaining": {
+        "name": "Descarga restante"
+      },
+      "battery_forecast": {
+        "name": "Previsão da bateria"
+      }
+    },
+    "binary_sensor": {
+      "smart_charge_active": {
+        "name": "Carga inteligente ativa"
+      },
+      "smart_discharge_active": {
+        "name": "Descarga inteligente ativa"
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "GoodWe Control",
+        "description": "Introduza as credenciais da API GoodWe Cloud.",
+        "data": {
+          "api_key": "Chave API",
+          "device_serial": "Número de série do dispositivo"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Não é possível ligar à API GoodWe Cloud. Verifique a sua ligação de rede.",
+      "invalid_auth": "Autenticação falhou. Verifique a chave API e o número de série do dispositivo."
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "entity": {
+    "sensor": {
+      "override_status": {
+        "name": "ステータス"
+      },
+      "smart_operations": {
+        "name": "スマート運転",
+        "state": {
+          "idle": "待機中",
+          "charging": "充電中",
+          "deferred": "待機予定",
+          "target_reached": "目標達成",
+          "discharging": "放電中",
+          "discharge_scheduled": "放電予定",
+          "discharge_suspended": "放電一時停止",
+          "charge_discharge_active": "充電 + 放電"
+        }
+      },
+      "charge_power": {
+        "name": "スマート充電電力"
+      },
+      "charge_window": {
+        "name": "充電時間帯"
+      },
+      "charge_remaining": {
+        "name": "充電残り時間"
+      },
+      "discharge_power": {
+        "name": "スマート放電電力"
+      },
+      "discharge_window": {
+        "name": "放電時間帯"
+      },
+      "discharge_remaining": {
+        "name": "放電残り時間"
+      },
+      "battery_forecast": {
+        "name": "バッテリー予測"
+      }
+    },
+    "binary_sensor": {
+      "smart_charge_active": {
+        "name": "スマート充電動作中"
+      },
+      "smart_discharge_active": {
+        "name": "スマート放電動作中"
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "GoodWe Control",
+        "description": "GoodWe Cloud API の認証情報を入力してください。",
+        "data": {
+          "api_key": "API キー",
+          "device_serial": "デバイスシリアル番号"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "GoodWe Cloud API に接続できません。ネットワーク接続を確認してください。",
+      "invalid_auth": "認証に失敗しました。API キーとデバイスシリアル番号を確認してください。"
+    }
+  }
+}

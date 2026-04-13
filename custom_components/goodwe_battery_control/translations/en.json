@@ -1,9 +1,180 @@
 {
+  "entity": {
+    "sensor": {
+      "override_status": {
+        "name": "Status"
+      },
+      "smart_operations": {
+        "name": "Smart Operations",
+        "state": {
+          "idle": "Idle",
+          "charging": "Charging",
+          "deferred": "Deferred",
+          "target_reached": "Target reached",
+          "discharging": "Discharging",
+          "discharge_scheduled": "Discharge scheduled",
+          "discharge_suspended": "Suspended",
+          "charge_discharge_active": "Charge + Discharge"
+        }
+      },
+      "charge_power": {
+        "name": "Charge Power"
+      },
+      "charge_window": {
+        "name": "Charge Window"
+      },
+      "charge_remaining": {
+        "name": "Charge Remaining"
+      },
+      "discharge_power": {
+        "name": "Discharge Power"
+      },
+      "discharge_window": {
+        "name": "Discharge Window"
+      },
+      "discharge_remaining": {
+        "name": "Discharge Remaining"
+      },
+      "battery_forecast": {
+        "name": "Battery Forecast"
+      }
+    },
+    "binary_sensor": {
+      "smart_charge_active": {
+        "name": "Smart Charge Active"
+      },
+      "smart_discharge_active": {
+        "name": "Smart Discharge Active"
+      }
+    }
+  },
   "config": {
     "step": {
       "user": {
-        "title": "GoodWe Battery Control",
-        "description": "This integration controls your GoodWe inverter via local entities exposed by the GoodWe HACS integration. Click Submit to continue, then configure entity mappings in Options."
+        "title": "GoodWe Control",
+        "description": "Enter your GoodWe Cloud API credentials.",
+        "data": {
+          "api_key": "API Key",
+          "device_serial": "Device Serial Number"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to GoodWe Cloud API. Check your network connection.",
+      "invalid_auth": "Authentication failed. Check your API key and device serial number."
+    }
+  },
+  "services": {
+    "clear_overrides": {
+      "name": "Clear overrides",
+      "description": "Return the inverter to self-use mode, clearing all or selected overrides.",
+      "fields": {
+        "mode": {
+          "name": "Mode",
+          "description": "Only clear overrides of this mode. If not set, all overrides are cleared."
+        }
+      }
+    },
+    "feedin": {
+      "name": "Feed-in",
+      "description": "Prioritise feeding excess solar to the grid for a set duration, optionally at a specific time and power limit.",
+      "fields": {
+        "duration": {
+          "name": "Duration",
+          "description": "How long to feed in (max 4 hours, must not cross midnight)."
+        },
+        "power": {
+          "name": "Power limit",
+          "description": "Feed-in power limit in watts. Defaults to inverter rated power if not set."
+        },
+        "start_time": {
+          "name": "Start time",
+          "description": "Time of day to start the override. Defaults to now if not set."
+        }
+      }
+    },
+    "force_charge": {
+      "name": "Force charge",
+      "description": "Charge the battery for a set duration, optionally at a specific time and power limit. The inverter automatically reverts to self-use when the window ends.",
+      "fields": {
+        "duration": {
+          "name": "Duration",
+          "description": "How long to force charge (max 4 hours, must not cross midnight)."
+        },
+        "power": {
+          "name": "Power limit",
+          "description": "Charge power limit in watts. Defaults to inverter rated power if not set."
+        },
+        "start_time": {
+          "name": "Start time",
+          "description": "Time of day to start the override. Defaults to now if not set."
+        }
+      }
+    },
+    "force_discharge": {
+      "name": "Force discharge",
+      "description": "Discharge the battery for a set duration, optionally at a specific time and power limit. The inverter automatically reverts to self-use when the window ends.",
+      "fields": {
+        "duration": {
+          "name": "Duration",
+          "description": "How long to force discharge (max 4 hours, must not cross midnight)."
+        },
+        "power": {
+          "name": "Power limit",
+          "description": "Discharge power limit in watts. Defaults to inverter rated power if not set."
+        },
+        "start_time": {
+          "name": "Start time",
+          "description": "Time of day to start the override. Defaults to now if not set."
+        }
+      }
+    },
+    "smart_charge": {
+      "name": "Smart charge",
+      "description": "Charge the battery within a time window, periodically adjusting the charge rate to reach a target SoC by the end of the interval.",
+      "fields": {
+        "start_time": {
+          "name": "Start time",
+          "description": "Time of day to start charging."
+        },
+        "end_time": {
+          "name": "End time",
+          "description": "Time of day to stop charging. Must be after start time, within 4 hours."
+        },
+        "target_soc": {
+          "name": "Target SoC",
+          "description": "Charge the battery to this SoC level. Charging stops and reverts to self-use when reached."
+        },
+        "power": {
+          "name": "Maximum power",
+          "description": "Maximum charge power in watts. The actual power may be lower to pace charging to the end of the window."
+        }
+      }
+    },
+    "smart_discharge": {
+      "name": "Smart discharge",
+      "description": "Discharge the battery within a time window, automatically reverting to self-use when a minimum SoC is reached.",
+      "fields": {
+        "start_time": {
+          "name": "Start time",
+          "description": "Time of day to start discharging."
+        },
+        "end_time": {
+          "name": "End time",
+          "description": "Time of day to stop discharging. Must be after start time, within 4 hours."
+        },
+        "power": {
+          "name": "Power limit",
+          "description": "Discharge power limit in watts. Defaults to inverter rated power if not set."
+        },
+        "min_soc": {
+          "name": "Minimum SoC to stop discharge",
+          "description": "Stop discharging and revert to self-use when the battery reaches this level."
+        },
+        "feedin_energy_limit_kwh": {
+          "name": "Feed-in energy limit",
+          "description": "Stop discharging after this much energy (kWh) has been fed into the grid, beyond household self-consumption."
+        }
       }
     }
   },

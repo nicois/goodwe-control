@@ -1,4 +1,33 @@
 {
+  "entity": {
+    "sensor": {
+      "override_status": { "name": "Status" },
+      "smart_operations": {
+        "name": "Smart Operations",
+        "state": {
+          "idle": "Idle",
+          "charging": "Charging",
+          "deferred": "Deferred",
+          "target_reached": "Target reached",
+          "discharging": "Discharging",
+          "discharge_scheduled": "Discharge scheduled",
+          "discharge_suspended": "Suspended",
+          "charge_discharge_active": "Charge + Discharge"
+        }
+      },
+      "charge_power": { "name": "Charge Power" },
+      "charge_window": { "name": "Charge Window" },
+      "charge_remaining": { "name": "Charge Remaining" },
+      "discharge_power": { "name": "Discharge Power" },
+      "discharge_window": { "name": "Discharge Window" },
+      "discharge_remaining": { "name": "Discharge Remaining" },
+      "battery_forecast": { "name": "Battery Forecast" }
+    },
+    "binary_sensor": {
+      "smart_charge_active": { "name": "Smart Charge Active" },
+      "smart_discharge_active": { "name": "Smart Discharge Active" }
+    }
+  },
   "services": {
     "clear_overrides": {
       "name": "Clear overrides",
