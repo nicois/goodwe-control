@@ -13,6 +13,7 @@
           "target_reached": "目標達成",
           "discharging": "放電中",
           "discharge_scheduled": "放電予定",
+          "discharge_deferred": "放電遅延中",
           "discharge_suspended": "放電一時停止",
           "charge_discharge_active": "充電 + 放電"
         }

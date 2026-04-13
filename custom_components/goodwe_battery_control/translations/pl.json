@@ -13,6 +13,7 @@
           "target_reached": "Cel osiągnięty",
           "discharging": "Rozładowywanie",
           "discharge_scheduled": "Rozładowanie zaplanowane",
+          "discharge_deferred": "Rozładowanie odroczone",
           "discharge_suspended": "Wstrzymane",
           "charge_discharge_active": "Ładowanie + Rozładowywanie"
         }

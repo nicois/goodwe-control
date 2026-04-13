@@ -13,6 +13,7 @@
           "target_reached": "Meta atingida",
           "discharging": "Descarregando",
           "discharge_scheduled": "Descarga agendada",
+          "discharge_deferred": "Descarga adiada",
           "discharge_suspended": "Suspensa",
           "charge_discharge_active": "Carga + Descarga"
         }

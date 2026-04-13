@@ -13,6 +13,7 @@
           "target_reached": "Objectif atteint",
           "discharging": "Décharge",
           "discharge_scheduled": "Décharge programmée",
+          "discharge_deferred": "Décharge différée",
           "discharge_suspended": "Suspendue",
           "charge_discharge_active": "Charge + Décharge"
         }

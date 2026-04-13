@@ -1,3 +1,8 @@
+## 1.0.1-beta.2
+
+### Added
+- **Deferred self-use for smart discharge**: stays in self-use mode as long as possible, then switches to forced discharge only when a calculated deadline requires it — prevents accidental grid import when paced discharge power would be below house load
+
 ## 1.0.0
 
 ### Added

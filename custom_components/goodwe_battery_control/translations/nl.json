@@ -13,6 +13,7 @@
           "target_reached": "Doel bereikt",
           "discharging": "Ontladen",
           "discharge_scheduled": "Ontladen gepland",
+          "discharge_deferred": "Ontlading uitgesteld",
           "discharge_suspended": "Gepauzeerd",
           "charge_discharge_active": "Laden + Ontladen"
         }

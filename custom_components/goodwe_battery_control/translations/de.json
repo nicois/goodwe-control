@@ -13,6 +13,7 @@
           "target_reached": "Ziel erreicht",
           "discharging": "Entladen",
           "discharge_scheduled": "Entladung geplant",
+          "discharge_deferred": "Entladung verzögert",
           "discharge_suspended": "Pausiert",
           "charge_discharge_active": "Laden + Entladen"
         }
