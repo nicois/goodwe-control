@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: pre-commit/action@v3.0.1
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e '.[dev]'
+      - run: pytest --tb=short
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch canonical smart_battery from foxess-control
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/nicois/foxess-control.git /tmp/canonical
+          cd /tmp/canonical && git sparse-checkout set smart_battery
+      - name: Compare vendored copy against canonical
+        run: |
+          diff -r /tmp/canonical/smart_battery \
+                  custom_components/goodwe_battery_control/smart_battery \
+                  --exclude='__pycache__'
+
+  release:
+    needs: [lint, test, hassfest, hacs, drift]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get tag version
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Get manifest version
+        id: manifest
+        run: |
+          version=$(jq -r .version custom_components/goodwe_battery_control/manifest.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify versions match
+        run: |
+          if [ "${{ steps.tag.outputs.version }}" != "${{ steps.manifest.outputs.version }}" ]; then
+            echo "::error::Tag v${{ steps.tag.outputs.version }} does not match manifest version ${{ steps.manifest.outputs.version }}"
+            exit 1
+          fi
+
+      - name: Extract changelog
+        id: changelog
+        run: |
+          version="${{ steps.tag.outputs.version }}"
+          body=$(awk -v ver="## ${version}" '
+            $0 == ver { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md)
+          echo "$body" > /tmp/release_body.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: /tmp/release_body.md
+          prerelease: ${{ contains(github.ref_name, '-') }}

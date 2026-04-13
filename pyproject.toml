@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "goodwe-battery-control"
+version = "1.0.0-beta.3"
+description = "Smart battery control for GoodWe inverters via Home Assistant"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "pre-commit>=3.0",
+    "mypy>=1.15",
+    "ruff>=0.11",
+    "homeassistant",
+    "voluptuous",
+    "pyyaml>=6.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "custom_components.goodwe_battery_control"
+disable_error_code = ["unused-ignore"]
+
+[[tool.mypy.overrides]]
+module = "custom_components.goodwe_battery_control.config_flow"
+disable_error_code = ["misc", "call-arg"]
+
+[tool.ruff]
+extend-exclude = ["*.json", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "TCH"]

@@ -1,0 +1,30 @@
+name: Smart Battery Drift Check
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # Daily check — catches upstream changes in foxess-control
+    - cron: "0 6 * * *"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch canonical smart_battery from foxess-control
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/nicois/foxess-control.git /tmp/canonical
+          cd /tmp/canonical && git sparse-checkout set smart_battery
+
+      - name: Compare vendored copy against canonical
+        run: |
+          diff -r /tmp/canonical/smart_battery \
+                  custom_components/goodwe_battery_control/smart_battery \
+                  --exclude='__pycache__'
+          echo "smart_battery/ is in sync with foxess-control canonical"
