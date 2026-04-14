@@ -604,6 +604,7 @@ class SmartOperationsOverviewSensor(SensorEntity):
         self._attr_device_info = device_info
         self._attr_options = [
             "idle",
+            "error",
             "charging",
             "deferred",
             "target_reached",
@@ -643,6 +644,10 @@ class SmartOperationsOverviewSensor(SensorEntity):
                 return "discharge_suspended"
             return "discharging"
 
+        err = self.hass.data.get(self._domain, {}).get("_smart_error_state")
+        if err and err.get("last_error"):
+            return "error"
+
         return "idle"
 
     @property
@@ -664,9 +669,14 @@ class SmartOperationsOverviewSensor(SensorEntity):
         cs = get_charge_state(self.hass, self._domain)
         ds = get_discharge_state(self.hass, self._domain)
 
+        err = self.hass.data.get(self._domain, {}).get("_smart_error_state", {})
         attrs: dict[str, Any] = {
             "charge_active": cs is not None,
             "discharge_active": ds is not None,
+            "has_error": bool(err.get("last_error")),
+            "last_error": err.get("last_error"),
+            "last_error_at": err.get("last_error_at"),
+            "error_count": err.get("error_count", 0),
         }
 
         if cs is not None:
@@ -690,7 +700,8 @@ class SmartOperationsOverviewSensor(SensorEntity):
                     ),
                     "charge_start_time": cs["start"].isoformat(),
                     "charge_end_time": cs["end"].isoformat(),
-                    "charge_start_soc": cs.get("start_soc"),
+                    "charge_start_soc": cs.get("start_soc", soc),
+                    "charge_target_reachable": self._is_charge_reachable(cs, soc),
                 }
             )
 
@@ -742,7 +753,7 @@ class SmartOperationsOverviewSensor(SensorEntity):
                     ),
                     "discharge_start_time": ds["start"].isoformat(),
                     "discharge_end_time": ds["end"].isoformat(),
-                    "discharge_start_soc": ds.get("start_soc"),
+                    "discharge_start_soc": ds.get("start_soc", soc),
                     "discharge_feedin_limit_kwh": feedin_limit,
                     "discharge_feedin_used_kwh": feedin_used,
                     "discharge_feedin_projected_kwh": feedin_projected,
@@ -750,6 +761,32 @@ class SmartOperationsOverviewSensor(SensorEntity):
             )
 
         return attrs
+
+    def _is_charge_reachable(
+        self, cs: dict[str, Any], soc: float | None
+    ) -> bool | None:
+        """Check if the charge target can be reached in remaining time."""
+        from .algorithms import is_charge_target_reachable
+
+        if soc is None:
+            return None
+        now = dt_util.now()
+        end: datetime.datetime = cs["end"]
+        if end.tzinfo is None and now.tzinfo is not None:
+            now = now.replace(tzinfo=None)
+        remaining_h = (end - now).total_seconds() / 3600.0
+        if remaining_h <= 0:
+            return None
+        capacity = get_battery_capacity_kwh(self.hass, self._domain)
+        taper = self.hass.data.get(self._domain, {}).get("_taper_profile")
+        return is_charge_target_reachable(
+            soc,
+            cs.get("target_soc", 100),
+            capacity,
+            remaining_h,
+            cs.get("max_power_w", 0),
+            taper_profile=taper,
+        )
 
 
 class ChargePowerSensor(SensorEntity):

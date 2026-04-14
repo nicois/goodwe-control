@@ -149,6 +149,51 @@ def calculate_charge_power(
     return max(100, min(int(power_w), max_power_w))
 
 
+def is_charge_target_reachable(
+    current_soc: float,
+    target_soc: int,
+    battery_capacity_kwh: float,
+    remaining_hours: float,
+    max_power_w: int,
+    net_consumption_kw: float = 0.0,
+    headroom: float = 0.10,
+    taper_profile: TaperProfile | None = None,
+) -> bool:
+    """Return True if the charge target can be reached in the remaining time.
+
+    Uses the same consumption headroom and taper-awareness as the deferred
+    start calculation.  If even max power for the full remaining window
+    (with headroom) can't deliver enough energy, the target is unreachable.
+    """
+    energy_needed_kwh = (target_soc - current_soc) / 100.0 * battery_capacity_kwh
+    if energy_needed_kwh <= 0:
+        return True
+    if remaining_hours <= 0:
+        return False
+
+    max_power_kw = max_power_w / 1000.0
+    consumption_headroom_kw = max(0.0, net_consumption_kw)
+    min_headroom_kw = max_power_kw * headroom
+    headroom_kw = max(consumption_headroom_kw, min_headroom_kw)
+    effective_charge_kw = max_power_kw - headroom_kw
+    if effective_charge_kw <= 0:
+        effective_charge_kw = max_power_kw * headroom
+
+    if taper_profile is not None:
+        charge_hours = taper_profile.estimate_charge_hours(
+            current_soc,
+            target_soc,
+            battery_capacity_kwh,
+            int(effective_charge_kw * 1000),
+        )
+    else:
+        charge_hours = energy_needed_kwh / effective_charge_kw
+
+    # Add the same time buffer used by deferred start
+    buffered_hours = charge_hours / (1 - headroom)
+    return buffered_hours <= remaining_hours
+
+
 PEAK_DECAY_PER_TICK = 0.85
 """Exponential decay factor applied to peak consumption each polling tick.
 
@@ -351,20 +396,24 @@ def calculate_deferred_start(
     if energy_needed_kwh <= 0:
         return end
 
+    # Reduce effective power by consumption headroom — house load eats
+    # into the inverter's charge budget regardless of taper.
+    max_power_kw = max_power_w / 1000.0
+    consumption_headroom_kw = max(0.0, net_consumption_kw)
+    min_headroom_kw = max_power_kw * headroom
+    headroom_kw = max(consumption_headroom_kw, min_headroom_kw)
+    effective_charge_kw = max_power_kw - headroom_kw
+    if effective_charge_kw <= 0:
+        effective_charge_kw = max_power_kw * headroom
+
     if taper_profile is not None:
-        # Taper-aware: numerically integrate over the SoC range
         charge_hours = taper_profile.estimate_charge_hours(
-            current_soc, target_soc, battery_capacity_kwh, max_power_w
+            current_soc,
+            target_soc,
+            battery_capacity_kwh,
+            int(effective_charge_kw * 1000),
         )
     else:
-        # Linear estimate (original behaviour)
-        max_power_kw = max_power_w / 1000.0
-        consumption_headroom_kw = max(0.0, net_consumption_kw)
-        min_headroom_kw = max_power_kw * headroom
-        headroom_kw = max(consumption_headroom_kw, min_headroom_kw)
-        effective_charge_kw = max_power_kw - headroom_kw
-        if effective_charge_kw <= 0:
-            effective_charge_kw = max_power_kw * headroom
         charge_hours = energy_needed_kwh / effective_charge_kw
 
     buffered_hours = charge_hours / (1 - headroom)
@@ -414,22 +463,22 @@ def calculate_discharge_deferred_start(
     soc_deadline = end
     energy_to_discharge_kwh = (current_soc - min_soc) / 100.0 * battery_capacity_kwh
     if energy_to_discharge_kwh > 0:
-        if taper_profile is not None:
+        # House consumption assists discharge — subtract it.
+        consumption = max(0.0, net_consumption_kw)
+        effective_kw = max_power_kw - consumption
+        if effective_kw <= 0:
+            # House load alone exceeds max discharge — self-use will
+            # drain the battery without any forced discharge needed.
+            discharge_hours = 0.0
+        elif taper_profile is not None:
             discharge_hours = taper_profile.estimate_discharge_hours(
-                current_soc, min_soc, battery_capacity_kwh, max_power_w
+                current_soc,
+                min_soc,
+                battery_capacity_kwh,
+                int(effective_kw * 1000),
             )
         else:
-            # House consumption assists discharge — subtract it.
-            consumption = max(0.0, net_consumption_kw)
-            effective_kw = max_power_kw - consumption
-            if effective_kw <= 0:
-                # House load alone exceeds max discharge — self-use will
-                # drain the battery without any forced discharge needed.
-                effective_kw = 0
-            if effective_kw <= 0:
-                discharge_hours = 0.0
-            else:
-                discharge_hours = energy_to_discharge_kwh / effective_kw
+            discharge_hours = energy_to_discharge_kwh / effective_kw
 
         if discharge_hours > 0:
             buffered_hours = discharge_hours / (1 - headroom)

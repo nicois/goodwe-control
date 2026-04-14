@@ -143,6 +143,19 @@ def _get_store(hass: HomeAssistant, domain: str) -> Store[dict[str, Any]] | None
     return hass.data.get(domain, {}).get("_store")  # type: ignore[no-any-return]
 
 
+def _record_error(hass: HomeAssistant, domain: str, message: str) -> None:
+    """Record a session error for UI surfacing (C-026)."""
+    domain_data = hass.data.get(domain)
+    if domain_data is None:
+        return
+    prev = domain_data.get("_smart_error_state", {})
+    domain_data["_smart_error_state"] = {
+        "last_error": message,
+        "last_error_at": dt_util.now().isoformat(),
+        "error_count": prev.get("error_count", 0) + 1,
+    }
+
+
 def _get_taper_profile(hass: HomeAssistant, domain: str) -> TaperProfile | None:
     """Return the adaptive taper profile from domain data.
 
@@ -242,6 +255,23 @@ def setup_smart_charge_listeners(
         if cur_state is None or cur_state.get("session_id") != my_session_id:
             return
 
+        try:
+            await _adjust_charge_power_inner(cur_state)
+        except Exception:
+            _LOGGER.exception("Smart charge: unexpected error, aborting session")
+            _record_error(hass, domain, "Charge session aborted: unexpected error")
+            try:
+                charging_started = cur_state.get("charging_started", False)
+                if _is_my_session():
+                    cancel_smart_charge(hass, domain)
+                    if charging_started:
+                        await _remove_charge_override()
+            except Exception:
+                _LOGGER.exception("Smart charge: cleanup also failed")
+
+    async def _adjust_charge_power_inner(
+        cur_state: dict[str, Any],
+    ) -> None:
         cur_soc = _get_current_soc(hass, domain)
         if cur_soc is None:
             cur_state["soc_unavailable_count"] = (
@@ -251,6 +281,9 @@ def setup_smart_charge_listeners(
                 _LOGGER.warning(
                     "Smart charge: SoC unavailable for %d checks, aborting",
                     cur_state["soc_unavailable_count"],
+                )
+                _record_error(
+                    hass, domain, "Charge aborted: SoC unavailable for 15 min"
                 )
                 charging_started = cur_state.get("charging_started", False)
                 if _is_my_session():
@@ -457,7 +490,7 @@ def setup_smart_discharge_listeners(
     hass: HomeAssistant,
     domain: str,
     adapter: InverterAdapter,
-) -> None:
+) -> Any:
     """Register HA listeners for an active smart discharge session.
 
     Reads all parameters from ``hass.data[domain]["_smart_discharge_state"]``.
@@ -503,6 +536,23 @@ def setup_smart_discharge_listeners(
         if cur_state is None or cur_state.get("session_id") != my_session_id:
             return
 
+        try:
+            await _check_discharge_soc_inner(cur_state)
+        except Exception:
+            _LOGGER.exception("Smart discharge: unexpected error, aborting session")
+            _record_error(hass, domain, "Discharge session aborted: unexpected error")
+            try:
+                discharging_started = cur_state.get("discharging_started", False)
+                if _is_my_session():
+                    cancel_smart_discharge(hass, domain)
+                    if discharging_started:
+                        await _remove_discharge_override()
+            except Exception:
+                _LOGGER.exception("Smart discharge: cleanup also failed")
+
+    async def _check_discharge_soc_inner(
+        cur_state: dict[str, Any],
+    ) -> None:
         # --- Update peak consumption tracker ---
         current_consumption = max(0.0, _get_net_consumption(hass, domain))
         old_peak = cur_state.get("consumption_peak_kw", 0.0)
@@ -618,9 +668,10 @@ def setup_smart_discharge_listeners(
                     poll_seconds = _get_polling_interval_seconds(hass, domain)
                     poll_hours = poll_seconds / 3600
 
-                    feedin_prev = cur_state.get("feedin_prev_kwh")
+                    feedin_prev: float | None = cur_state.get("feedin_prev_kwh")
                     has_observed = feedin_prev is not None and feedin_now != feedin_prev
                     if has_observed:
+                        assert feedin_prev is not None  # narrowed above
                         observed_rate_kw = (feedin_now - feedin_prev) / poll_hours
                     cur_state["feedin_prev_kwh"] = feedin_now
 
@@ -662,7 +713,24 @@ def setup_smart_discharge_listeners(
         # --- Power pacing ---
         soc_value = _get_current_soc(hass, domain)
         if soc_value is None:
+            cur_state["soc_unavailable_count"] = (
+                cur_state.get("soc_unavailable_count", 0) + 1
+            )
+            if cur_state["soc_unavailable_count"] >= MAX_SOC_UNAVAILABLE_COUNT:
+                _LOGGER.warning(
+                    "Smart discharge: SoC unavailable for %d checks, aborting",
+                    cur_state["soc_unavailable_count"],
+                )
+                _record_error(hass, domain, "Discharge aborted: SoC unavailable")
+                discharging_started = cur_state.get("discharging_started", False)
+                if _is_my_session():
+                    cancel_smart_discharge(hass, domain)
+                    if discharging_started:
+                        await _remove_discharge_override()
+                return
+            _LOGGER.debug("Smart discharge: SoC unavailable, skipping adjustment")
             return
+        cur_state["soc_unavailable_count"] = 0
 
         # Record taper observation for discharge
         taper = _get_taper_profile(hass, domain)
@@ -819,3 +887,4 @@ def setup_smart_discharge_listeners(
         async_track_point_in_time(hass, _on_timer_expire, end_utc),
     ]
     hass.data[domain]["_smart_discharge_unsubs"] = unsubs
+    return _check_discharge_soc
