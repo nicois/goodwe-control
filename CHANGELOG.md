@@ -1,3 +1,15 @@
+## 1.0.1-beta.6
+
+### Added
+- **Discharge SoC unavailability abort (C-019)**: discharge sessions now abort after 3 consecutive SoC-unavailable checks, matching charge path behaviour
+- **Safe state on failure (C-024)**: listener callbacks catch unexpected exceptions, cancel the session, and revert to self-use
+- **Unreachable charge target detection (C-022)**: new `charge_target_reachable` attribute on the smart operations sensor
+- **Proactive error surfacing (C-026)**: session errors surfaced via sensor attributes (`has_error`, `last_error`, `last_error_at`, `error_count`)
+
+### Fixed
+- **Taper-path consumption bypass (D-007)**: deferred start taper paths now account for household consumption
+- **Taper save interval aligned (D-012)**: charge and discharge both use `_TAPER_SAVE_EVERY_N=5`
+
 ## 1.0.1-beta.4
 
 ### Added
