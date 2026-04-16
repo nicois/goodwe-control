@@ -30,6 +30,8 @@ testpaths = ["tests"]
 strict = true
 warn_return_any = true
 warn_unused_configs = false
+explicit_package_bases = true
+mypy_path = "."
 
 [[tool.mypy.overrides]]
 module = "custom_components.goodwe_battery_control"

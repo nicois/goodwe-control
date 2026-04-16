@@ -18,7 +18,7 @@ jobs:
 
       - name: Fetch canonical smart_battery from foxess-control
         run: |
-          git clone --depth 1 --filter=blob:none --sparse \
+          git clone --depth 1 --branch develop --filter=blob:none --sparse \
             https://github.com/nicois/foxess-control.git /tmp/canonical
           cd /tmp/canonical && git sparse-checkout set smart_battery
 

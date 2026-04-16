@@ -115,9 +115,7 @@ class TestAsyncUpdateData:
 
     @pytest.mark.asyncio
     async def test_missing_entity_returns_none_for_work_mode(self) -> None:
-        coord = _make_coordinator(
-            {"_work_mode": "select.goodwe_nonexistent"}
-        )
+        coord = _make_coordinator({"_work_mode": "select.goodwe_nonexistent"})
         coord.hass.states.get = MagicMock(return_value=None)
 
         data = await coord._async_update_data()
@@ -132,9 +130,7 @@ class TestAsyncUpdateData:
         def get_state(entity_id: str) -> Any:
             return {"sensor.goodwe_text": text_state}.get(entity_id)
 
-        coord = _make_coordinator(
-            {"feedin": "sensor.goodwe_text"}
-        )
+        coord = _make_coordinator({"feedin": "sensor.goodwe_text"})
         coord.hass.states.get = get_state
 
         data = await coord._async_update_data()
@@ -157,9 +153,7 @@ class TestAsyncUpdateData:
         def get_state(entity_id: str) -> Any:
             return {"select.goodwe_mode": unavail_state}.get(entity_id)
 
-        coord = _make_coordinator(
-            {"_work_mode": "select.goodwe_mode"}
-        )
+        coord = _make_coordinator({"_work_mode": "select.goodwe_mode"})
         coord.hass.states.get = get_state
 
         data = await coord._async_update_data()
