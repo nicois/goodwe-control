@@ -11,7 +11,7 @@
  *   # soc_entity: sensor.goodwe_battery_soc
  */
 
-const CARD_VERSION = "1.3.0";
+const CARD_VERSION = "1.4.0";
 
 // -- i18n --------------------------------------------------------------------
 
@@ -696,6 +696,46 @@ class GoodWeControlCard extends HTMLElement {
     `;
   }
 
+  _timeProgressBar(label, value, pct, horizonPct, tooltip, tipKey) {
+    const hasTip = !!tooltip;
+    const expanded = hasTip && tipKey && this._expandedTips.has(tipKey);
+    const marker = horizonPct != null
+      ? `<div class="horizon-marker" style="left:${horizonPct}%" title="Schedule horizon"></div>`
+      : "";
+    return `
+      <div class="progress-row${hasTip ? " has-tip" : ""}${expanded ? " expanded" : ""}"${tipKey ? ` data-tip-key="${tipKey}"` : ""}>
+        <div class="detail-row">
+          <span class="detail-label">${label}</span>
+          <span class="detail-value">${value}</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill time-fill" style="width:${pct}%"></div>${marker}
+        </div>
+        ${hasTip ? `<div class="progress-tip">${tooltip}</div>` : ""}
+      </div>
+    `;
+  }
+
+  _socProgressBar(label, value, confirmedPct, projectedPct, fillClass, tooltip, tipKey) {
+    // Two-zone SoC bar: solid confirmed + semi-transparent projected.
+    // When only integer SoC is available, both are equal (no projected zone).
+    const hasTip = !!tooltip;
+    const expanded = hasTip && tipKey && this._expandedTips.has(tipKey);
+    const projectedWidth = Math.max(0, projectedPct - confirmedPct);
+    return `
+      <div class="progress-row${hasTip ? " has-tip" : ""}${expanded ? " expanded" : ""}"${tipKey ? ` data-tip-key="${tipKey}"` : ""}>
+        <div class="detail-row">
+          <span class="detail-label">${label}</span>
+          <span class="detail-value">${value}</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill ${fillClass}" style="width:${confirmedPct}%"></div>${projectedWidth > 0.2 ? `<div class="progress-fill ${fillClass} projected" style="width:${projectedWidth}%"></div>` : ""}
+        </div>
+        ${hasTip ? `<div class="progress-tip">${tooltip}</div>` : ""}
+      </div>
+    `;
+  }
+
   _energyScheduleBar(label, value, actualPct, expectedPct, tooltip, tipKey) {
     // Show energy progress with a coloured gap segment indicating
     // whether discharge is ahead of or behind the ideal schedule.
@@ -742,16 +782,19 @@ class GoodWeControlCard extends HTMLElement {
     const now = Date.now();
     let bars = "";
 
-    if (chargeActive) {
+    if (chargeActive && a.charge_phase !== "deferred") {
       const startSoc = a.charge_start_soc;
       const current = a.charge_current_soc;
+      const confirmed = a.charge_confirmed_soc ?? current;
       const target = a.charge_target_soc;
 
       let socPct = 0;
+      let confirmedPct = 0;
       if (startSoc != null && target != null && current != null && target > startSoc) {
         socPct = Math.min(100, Math.max(0, ((current - startSoc) / (target - startSoc)) * 100));
+        confirmedPct = Math.min(100, Math.max(0, ((confirmed - startSoc) / (target - startSoc)) * 100));
       }
-      const curStr = current != null ? Math.round(current) + "%" : "?%";
+      const curStr = current != null ? current.toFixed(1) + "%" : "?%";
       const tgtStr = target != null ? target + "%" : "?%";
       const socLabel = startSoc != null && Math.round(startSoc) !== Math.round(current ?? startSoc)
         ? `${Math.round(startSoc)}% → ${curStr} → ${tgtStr}`
@@ -773,30 +816,33 @@ class GoodWeControlCard extends HTMLElement {
         ? this._t("tip_power_charge_deferred")
         : this._t("tip_power_active").replace("{0}", this._formatPower(chargePower)).replace("{1}", this._formatPower(chargeMax));
 
-      bars += this._progressBar(this._t("soc"), socLabel, socPct, "charge-fill", socTip, "charge-soc");
+      bars += this._socProgressBar(this._t("soc"), socLabel, confirmedPct, socPct, "charge-fill", socTip, "charge-soc");
       bars += this._progressBar(this._t("power"), this._formatPower(chargePower), chargePowerPct, "charge-fill", chargePowerTip, "charge-power");
       bars += this._progressBar(this._t("time"), time.label, time.pct, "time-fill", timeTip, "charge-time");
     }
 
-    if (dischargeActive) {
+    if (dischargeActive && a.discharge_phase !== "scheduled") {
       const startSoc = a.discharge_start_soc;
       const current = a.discharge_current_soc;
+      const confirmed = a.discharge_confirmed_soc ?? current;
       const minSoc = a.discharge_min_soc;
 
       let socPct = 0;
+      let confirmedPct = 0;
       if (startSoc != null && minSoc != null && current != null && startSoc > minSoc) {
         socPct = Math.min(100, Math.max(0, ((startSoc - current) / (startSoc - minSoc)) * 100));
+        confirmedPct = Math.min(100, Math.max(0, ((startSoc - confirmed) / (startSoc - minSoc)) * 100));
       }
-      const curStr = current != null ? Math.round(current) + "%" : "?%";
+      const curStr = current != null ? current.toFixed(1) + "%" : "?%";
       const minStr = minSoc != null ? minSoc + "%" : "?%";
       const socLabel = startSoc != null && Math.round(startSoc) !== Math.round(current ?? startSoc)
         ? `${Math.round(startSoc)}% → ${curStr} → ${minStr}`
         : `${curStr} → ${minStr}`;
 
       const socTip = current != null && minSoc != null
-        ? this._t("tip_soc_discharge").replace("{0}", Math.round(current)).replace("{1}", minSoc).replace("{2}", Math.max(0, Math.round(current) - minSoc))
+        ? this._t("tip_soc_discharge").replace("{0}", current.toFixed(1)).replace("{1}", minSoc).replace("{2}", Math.max(0, current - minSoc).toFixed(1))
         : "";
-      bars += this._progressBar(this._t("soc"), socLabel, socPct, "discharge-fill", socTip, "discharge-soc");
+      bars += this._socProgressBar(this._t("soc"), socLabel, confirmedPct, socPct, "discharge-fill", socTip, "discharge-soc");
 
       const dischPower = a.discharge_power_w || 0;
       const dischMax = a.discharge_max_power_w || 1;
@@ -833,9 +879,25 @@ class GoodWeControlCard extends HTMLElement {
       const timeTip = time.label
         ? this._t("tip_time").replace("{0}", this._formatDuration(now - new Date(a.discharge_start_time).getTime())).replace("{1}", this._formatDuration(new Date(a.discharge_end_time).getTime() - new Date(a.discharge_start_time).getTime())).replace("{2}", this._formatDuration(time.remaining))
         : "";
-      bars += this._progressBar(this._t("time"), time.label, time.pct, "time-fill", timeTip, "discharge-time");
+
+      // Schedule horizon marker — shows how far ahead the inverter
+      // schedule extends.  If HA goes down, the schedule expires at
+      // this point and the inverter reverts to self-use.
+      const horizon = a.discharge_schedule_horizon;
+      let horizonPct = null;
+      if (horizon) {
+        const hTime = new Date(horizon).getTime();
+        const startTime = new Date(a.discharge_start_time).getTime();
+        const endTime = new Date(a.discharge_end_time).getTime();
+        const total = endTime - startTime;
+        if (total > 0) {
+          horizonPct = Math.min(100, Math.max(0, ((hTime - startTime) / total) * 100));
+        }
+      }
+      bars += this._timeProgressBar(this._t("time"), time.label, time.pct, horizonPct, timeTip, "discharge-time");
     }
 
+    if (!bars) return "";
     return `
       <div class="progress-section">
         <div class="progress-label">${this._t("progress")}</div>
@@ -1038,6 +1100,7 @@ class GoodWeControlCard extends HTMLElement {
         opacity: 1;
       }
       .progress-track {
+        position: relative;
         display: flex;
         height: 6px;
         background: var(--secondary-background-color, rgba(0, 0, 0, 0.08));
@@ -1054,6 +1117,19 @@ class GoodWeControlCard extends HTMLElement {
       }
       .discharge-fill {
         background: linear-gradient(90deg, var(--fc-discharge), #ffb74d);
+      }
+      .progress-fill.projected {
+        opacity: 0.35;
+      }
+      .horizon-marker {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: var(--primary-text-color, #333);
+        opacity: 0.5;
+        border-radius: 1px;
+        z-index: 1;
       }
       .energy-fill {
         background: linear-gradient(90deg, var(--fc-energy), #64b5f6);

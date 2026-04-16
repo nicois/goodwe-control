@@ -73,6 +73,26 @@ def get_soc_value(hass: HomeAssistant, domain: str) -> float | None:
     return get_coordinator_soc(hass, domain)
 
 
+def get_interpolated_soc(hass: HomeAssistant, domain: str) -> float | None:
+    """Read the interpolated SoC if available, falling back to raw SoC.
+
+    The coordinator integrates battery power between integer SoC ticks
+    to provide a sub-percent estimate for smoother progress display.
+    """
+    domain_data = hass.data.get(domain)
+    if domain_data is not None:
+        for key in domain_data:
+            if not str(key).startswith("_"):
+                entry_data = domain_data[key]
+                if isinstance(entry_data, dict):
+                    coord = entry_data.get("coordinator")
+                    if coord is not None and coord.data is not None:
+                        interp = coord.data.get("_soc_interpolated")
+                        if interp is not None:
+                            return float(interp)
+    return get_coordinator_soc(hass, domain)
+
+
 def get_battery_capacity_kwh(hass: HomeAssistant, domain: str) -> float:
     """Read battery capacity from the first config entry's options."""
     domain_data = hass.data.get(domain)
@@ -389,7 +409,7 @@ def build_forecast(
     capacity_kwh = get_battery_capacity_kwh(hass, domain)
 
     if cs is not None:
-        soc = get_soc_value(hass, domain)
+        soc = get_interpolated_soc(hass, domain)
         if soc is None or capacity_kwh <= 0:
             return []
 
@@ -425,7 +445,7 @@ def build_forecast(
         )
 
     if ds is not None:
-        soc = get_soc_value(hass, domain)
+        soc = get_interpolated_soc(hass, domain)
         if soc is None or capacity_kwh <= 0:
             return []
 
@@ -681,7 +701,7 @@ class SmartOperationsOverviewSensor(SensorEntity):
 
         if cs is not None:
             charging = is_effectively_charging(self.hass, self._domain, cs)
-            soc = get_soc_value(self.hass, self._domain)
+            soc = get_interpolated_soc(self.hass, self._domain)
             attrs.update(
                 {
                     "charge_phase": "charging" if charging else "deferred",
@@ -692,6 +712,7 @@ class SmartOperationsOverviewSensor(SensorEntity):
                     "charge_max_power_w": cs.get("max_power_w"),
                     "charge_target_soc": cs.get("target_soc"),
                     "charge_current_soc": soc,
+                    "charge_confirmed_soc": get_soc_value(self.hass, self._domain),
                     "charge_window": (
                         f"{format_time(cs['start'])} – {format_time(cs['end'])}"
                     ),
@@ -706,7 +727,7 @@ class SmartOperationsOverviewSensor(SensorEntity):
             )
 
         if ds is not None:
-            soc = get_soc_value(self.hass, self._domain)
+            soc = get_interpolated_soc(self.hass, self._domain)
             now = dt_util.now()
             ds_start = ds.get("start", now)
             if ds_start.tzinfo is None and now.tzinfo is not None:
@@ -745,6 +766,7 @@ class SmartOperationsOverviewSensor(SensorEntity):
                     "discharge_max_power_w": ds.get("max_power_w"),
                     "discharge_min_soc": ds.get("min_soc"),
                     "discharge_current_soc": soc,
+                    "discharge_confirmed_soc": get_soc_value(self.hass, self._domain),
                     "discharge_window": (
                         f"{format_time(ds['start'])} – {format_time(ds['end'])}"
                     ),
@@ -753,6 +775,7 @@ class SmartOperationsOverviewSensor(SensorEntity):
                     ),
                     "discharge_start_time": ds["start"].isoformat(),
                     "discharge_end_time": ds["end"].isoformat(),
+                    "discharge_schedule_horizon": ds.get("schedule_horizon"),
                     "discharge_start_soc": ds.get("start_soc", soc),
                     "discharge_feedin_limit_kwh": feedin_limit,
                     "discharge_feedin_used_kwh": feedin_used,

@@ -1,3 +1,21 @@
+## 1.0.1-beta.7
+
+### Added
+- **SoC interpolation**: sub-percent SoC estimates between integer ticks for smoother progress display
+- **Two-zone SoC progress bar**: solid confirmed + semi-transparent projected zone on charge/discharge bars
+- **Schedule horizon marker**: time progress bar shows how far ahead the inverter schedule extends
+- **Safe schedule end time (C-027)**: schedule end set to SoC/rate/safety_factor horizon, not full window
+- **Session cancel hook**: brand-specific post-cancel callback (e.g. stop WebSocket)
+- **Entity adapter input_select/input_number support**: service domain derived from entity prefix
+
+### Changed
+- Min SoC floor lowered from 5% to 0% in config flow and discharge service schema
+- Progress bars hidden when charge is deferred or discharge is pre-scheduled
+- Overview card retries entity map discovery after reload (10s cooldown)
+- House node shown as active when consuming 0W (not dimmed)
+- **Test suite**: added adapter, coordinator, service, and sensor tests mirroring foxess-control entity-mode test patterns
+- **CLAUDE.md**: added project instructions with constraints, architecture, and brand rules
+
 ## 1.0.1-beta.6
 
 ### Added

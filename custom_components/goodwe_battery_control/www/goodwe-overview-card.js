@@ -16,7 +16,7 @@
  *   # etc.
  */
 
-const GW_OVERVIEW_VERSION = "2.2.0";
+const GW_OVERVIEW_VERSION = "2.3.0";
 
 // -- i18n --------------------------------------------------------------------
 
@@ -193,8 +193,17 @@ class GoodWeOverviewCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (!this._entityMap && !this._fetchPending) {
-      this._fetchEntityMap();
+    // Retry discovery if the map is missing or empty (e.g. after reload)
+    const needsFetch =
+      !this._entityMap ||
+      (typeof this._entityMap === "object" &&
+        Object.keys(this._entityMap).length === 0);
+    if (needsFetch && !this._fetchPending) {
+      const now = Date.now();
+      if (!this._lastFetchAttempt || now - this._lastFetchAttempt > 10000) {
+        this._lastFetchAttempt = now;
+        this._fetchEntityMap();
+      }
     }
     this._render();
   }
@@ -306,7 +315,7 @@ class GoodWeOverviewCard extends HTMLElement {
     const gridNet = (gridImport || 0) - (gridExport || 0);
 
     const solarActive = solar != null && solar > 0.01;
-    const houseActive = house != null && house > 0.01;
+    const houseActive = house != null;
     const gridImporting = gridNet > 0.01;
     const gridExporting = gridNet < -0.01;
     const batCharging = batNet > 0.01;
