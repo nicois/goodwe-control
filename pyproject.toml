@@ -41,6 +41,10 @@ disable_error_code = ["unused-ignore"]
 module = "custom_components.goodwe_battery_control.config_flow"
 disable_error_code = ["misc", "call-arg"]
 
+[[tool.mypy.overrides]]
+module = "tests.*"
+disable_error_code = ["method-assign"]
+
 [tool.ruff]
 extend-exclude = ["*.json", "*.md"]
 
