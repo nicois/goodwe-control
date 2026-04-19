@@ -19,6 +19,8 @@ Inherited from the shared `smart_battery/` core (foxess-control canonical source
 - **C-015**: Vendored smart_battery/ must be byte-identical to canonical root copy in foxess-control
 - **C-017**: End-of-discharge guard: suspend when energy can't sustain safety floor for 10 min
 - **C-019**: Discharge SoC unavailability aborts session after 3 checks (matching charge C-012)
+- **C-024**: Safe state on failure: 3 consecutive adapter errors open circuit breaker (hold position). 5 more ticks without recovery → abort session → self-use
+- **C-025**: Session boundary cleanliness: all overrides removed before new session starts
 - **C-027**: Schedule end time set to safe horizon (SoC/rate/safety_factor), not full window
 
 GoodWe-specific:

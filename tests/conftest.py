@@ -76,7 +76,7 @@ def make_hass(
     hass = MagicMock()
     hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
     hass.async_create_task = MagicMock(
-        side_effect=lambda coro: asyncio.ensure_future(coro)
+        side_effect=lambda coro, **_kw: asyncio.ensure_future(coro)
     )
     hass.services.async_call = AsyncMock()
 
