@@ -67,6 +67,9 @@ from .smart_battery.const import (
     DEFAULT_SMART_HEADROOM as DEFAULT_SMART_HEADROOM,
 )
 from .smart_battery.const import (
+    MAX_CONSECUTIVE_ADAPTER_ERRORS as MAX_CONSECUTIVE_ADAPTER_ERRORS,
+)
+from .smart_battery.const import (
     MAX_OVERRIDE_HOURS as MAX_OVERRIDE_HOURS,
 )
 from .smart_battery.const import (

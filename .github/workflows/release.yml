@@ -5,65 +5,53 @@ on:
     tags:
       - "v*"
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
-  lint:
+  gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - uses: pre-commit/action@v3.0.1
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - run: pip install -e '.[dev]'
-      - run: pytest --tb=short
-
-  hassfest:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: home-assistant/actions/hassfest@master
-
-  hacs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hacs/action@main
-        with:
-          category: integration
-
-  drift:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Fetch canonical smart_battery from foxess-control
+      - name: Wait for commit CI workflows to pass
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git clone --depth 1 --branch develop --filter=blob:none --sparse \
-            https://github.com/nicois/foxess-control.git /tmp/canonical
-          cd /tmp/canonical && git sparse-checkout set smart_battery
-      - name: Compare vendored copy against canonical
-        run: |
-          diff -r /tmp/canonical/smart_battery \
-                  custom_components/goodwe_battery_control/smart_battery \
-                  --exclude='__pycache__'
+          sha="${{ github.sha }}"
+          repo="${{ github.repository }}"
+
+          required=("Lint & Test" "Hassfest" "HACS" "Smart Battery Drift Check")
+          echo "Waiting for ${#required[@]} workflows on $sha"
+
+          for i in $(seq 1 60); do
+            all_passed=true
+            for name in "${required[@]}"; do
+              status=$(gh api "repos/$repo/actions/runs?head_sha=$sha&event=push" \
+                --jq ".workflow_runs[] | select(.name == \"$name\") | .conclusion" \
+                2>/dev/null | head -1)
+              if [ "$status" = "success" ]; then
+                echo "✓ $name"
+              elif [ "$status" = "failure" ] || [ "$status" = "cancelled" ]; then
+                echo "✗ $name ($status)"
+                exit 1
+              else
+                echo "· $name (pending)"
+                all_passed=false
+              fi
+            done
+            if $all_passed; then
+              echo "All required workflows passed"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for workflows"
+          exit 1
 
   release:
-    needs: [lint, test, hassfest, hacs, drift]
+    needs: [gate]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Get tag version
         id: tag

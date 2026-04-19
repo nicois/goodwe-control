@@ -1,34 +1,26 @@
-## 1.0.1
+## 1.0.2-beta.1
+
+### Changed
+- Synced `smart_battery/` with foxess-control v1.0.7-beta.15
+- Two-tier circuit breaker: 3 consecutive adapter errors open circuit breaker (hold position), 5 more ticks without recovery abort session to self-use (C-024)
+- Safe schedule end time: discharge horizon set to SoC/rate/safety_factor, not full window (C-027)
+- Session state restoration across HA restarts via typed domain data
+- Improved error surfacing and session logging with structured context filter
+- Aligned CI workflows with foxess-control (actions v6, gate-based release)
+
+## 1.0.1-beta.4
 
 ### Added
-- **End-of-discharge guard (C-017)**: suspend discharge when remaining energy can't sustain the safety floor for 10 minutes
-- **Peak consumption tracking with safety floor**: tracks highest observed consumption with exponential decay (~21 min half-life), floors discharge power at peak x 1.5 to prevent grid import from inter-poll load spikes
+- **Peak consumption tracking with safety floor**: tracks highest observed consumption with exponential decay (~21 min half-life), floors discharge power at peak × 1.5 to prevent grid import from inter-poll load spikes
 - **Priority-weighted discharge**: strict P1 no-import > P2 min-SoC > P3 energy-target > P4 maximise-feed-in ordering with peak-aware deferred start and suspension
-- **Deferred self-use for smart discharge**: stays in self-use mode as long as possible, then switches to forced discharge only when a calculated deadline requires it
-- **SoC interpolation**: sub-percent SoC estimates between integer ticks for smoother progress display
-- **Two-zone SoC progress bar**: solid confirmed + semi-transparent projected zone on charge/discharge bars
-- **Schedule horizon marker**: time progress bar shows how far ahead the inverter schedule extends
-- **Safe schedule end time (C-027)**: schedule end set to SoC/rate/safety_factor horizon, not full window
-- **Discharge SoC unavailability abort (C-019)**: discharge sessions abort after 3 consecutive SoC-unavailable checks, matching charge path behaviour
-- **Safe state on failure (C-024)**: listener callbacks catch unexpected exceptions, cancel the session, and revert to self-use
-- **Unreachable charge target detection (C-022)**: new `charge_target_reachable` attribute on the smart operations sensor
-- **Proactive error surfacing (C-026)**: session errors surfaced via sensor attributes (`has_error`, `last_error`, `last_error_at`, `error_count`)
-- **Session cancel hook**: brand-specific post-cancel callback
-- **Entity adapter input_select/input_number support (GW-005)**: service domain derived from entity prefix
-- **Power progress bars with expandable tooltips** on Lovelace card
-- **Test suite**: adapter, coordinator, service, and sensor tests mirroring foxess-control entity-mode test patterns
+
+## 1.0.1-beta.3
+
+### Added
+- **Deferred self-use for smart discharge**: stays in self-use mode as long as possible, then switches to forced discharge only when a calculated deadline requires it — prevents accidental grid import when paced discharge power would be below house load
 
 ### Fixed
 - **Discharge power floor at house consumption**: during forced discharge, power is now floored at house load to prevent grid import
-- **Taper-path consumption bypass (D-007)**: deferred start taper paths now account for household consumption
-- **Taper save interval aligned (D-012)**: charge and discharge both use `_TAPER_SAVE_EVERY_N=5`
-
-### Changed
-- Min SoC floor lowered from 5% to 0% in config flow and discharge service schema
-- Progress bars hidden when charge is deferred or discharge is pre-scheduled
-- Overview card retries entity map discovery after reload (10s cooldown)
-- House node shown as active when consuming 0W (not dimmed)
-- Synced smart_battery core from foxess-control v1.0.1-beta.29
 
 ## 1.0.0
 

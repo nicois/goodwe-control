@@ -13,7 +13,11 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    RestoreSensor,
+    SensorDeviceClass,
+    SensorEntity,
+)
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -22,6 +26,7 @@ from .const import (
     DEFAULT_SMART_HEADROOM,
 )
 from .coordinator import get_coordinator_soc
+from .domain_data import get_domain_data
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -52,20 +57,12 @@ _FORECAST_STEP = datetime.timedelta(minutes=5)
 
 def get_charge_state(hass: HomeAssistant, domain: str) -> dict[str, Any] | None:
     """Read the smart charge state from hass.data."""
-    domain_data = hass.data.get(domain)
-    if domain_data is None:
-        return None
-    result: dict[str, Any] | None = domain_data.get("_smart_charge_state")
-    return result
+    return get_domain_data(hass, domain).smart_charge_state
 
 
 def get_discharge_state(hass: HomeAssistant, domain: str) -> dict[str, Any] | None:
     """Read the smart discharge state from hass.data."""
-    domain_data = hass.data.get(domain)
-    if domain_data is None:
-        return None
-    result: dict[str, Any] | None = domain_data.get("_smart_discharge_state")
-    return result
+    return get_domain_data(hass, domain).smart_discharge_state
 
 
 def get_soc_value(hass: HomeAssistant, domain: str) -> float | None:
@@ -79,67 +76,54 @@ def get_interpolated_soc(hass: HomeAssistant, domain: str) -> float | None:
     The coordinator integrates battery power between integer SoC ticks
     to provide a sub-percent estimate for smoother progress display.
     """
-    domain_data = hass.data.get(domain)
-    if domain_data is not None:
-        for key in domain_data:
-            if not str(key).startswith("_"):
-                entry_data = domain_data[key]
-                if isinstance(entry_data, dict):
-                    coord = entry_data.get("coordinator")
-                    if coord is not None and coord.data is not None:
-                        interp = coord.data.get("_soc_interpolated")
-                        if interp is not None:
-                            return float(interp)
+    from .domain_data import get_first_coordinator
+
+    coordinator = get_first_coordinator(hass, domain)
+    if coordinator is not None and coordinator.data is not None:
+        interp = coordinator.data.get("_soc_interpolated")
+        if interp is not None:
+            return float(interp)
     return get_coordinator_soc(hass, domain)
 
 
 def get_battery_capacity_kwh(hass: HomeAssistant, domain: str) -> float:
     """Read battery capacity from the first config entry's options."""
-    domain_data = hass.data.get(domain)
-    if domain_data is None:
-        return 0.0
-    for key in domain_data:
-        if not str(key).startswith("_"):
-            entry = hass.config_entries.async_get_entry(str(key))
-            if entry is not None:
-                cap: float = entry.options.get(CONF_BATTERY_CAPACITY_KWH, 0.0)
-                return cap
+    from .domain_data import get_first_entry_id
+
+    eid = get_first_entry_id(hass, domain)
+    if eid is not None:
+        entry = hass.config_entries.async_get_entry(eid)
+        if entry is not None:
+            cap: float = entry.options.get(CONF_BATTERY_CAPACITY_KWH, 0.0)
+            return cap
     return 0.0
 
 
 def get_smart_headroom_fraction(hass: HomeAssistant, domain: str) -> float:
     """Read charge headroom from the first config entry's options as a fraction."""
-    domain_data = hass.data.get(domain)
-    if domain_data is None:
-        return DEFAULT_SMART_HEADROOM / 100.0
-    for key in domain_data:
-        if not str(key).startswith("_"):
-            entry = hass.config_entries.async_get_entry(str(key))
-            if entry is not None:
-                pct: int = entry.options.get(
-                    CONF_SMART_HEADROOM, DEFAULT_SMART_HEADROOM
-                )
-                return pct / 100.0
+    from .domain_data import get_first_entry_id
+
+    eid = get_first_entry_id(hass, domain)
+    if eid is not None:
+        entry = hass.config_entries.async_get_entry(eid)
+        if entry is not None:
+            pct: int = entry.options.get(CONF_SMART_HEADROOM, DEFAULT_SMART_HEADROOM)
+            return pct / 100.0
     return DEFAULT_SMART_HEADROOM / 100.0
 
 
 def get_coordinator_value(hass: HomeAssistant, domain: str, key: str) -> float | None:
     """Read a numeric value from the first available coordinator."""
-    domain_data = hass.data.get(domain)
-    if domain_data is None:
-        return None
-    for k in domain_data:
-        if not str(k).startswith("_"):
-            entry_data = domain_data.get(k)
-            if isinstance(entry_data, dict):
-                coordinator = entry_data.get("coordinator")
-                if coordinator is not None and coordinator.data:
-                    raw = coordinator.data.get(key)
-                    if raw is not None:
-                        try:
-                            return float(raw)
-                        except (ValueError, TypeError):
-                            pass
+    from .domain_data import get_first_coordinator
+
+    coordinator = get_first_coordinator(hass, domain)
+    if coordinator is not None and coordinator.data:
+        raw = coordinator.data.get(key)
+        if raw is not None:
+            try:
+                return float(raw)
+            except (ValueError, TypeError):
+                pass
     return None
 
 
@@ -495,6 +479,19 @@ class OverrideStatusSensor(SensorEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = True
+    _unrecorded_attributes = frozenset(
+        {
+            "mode",
+            "phase",
+            "power_w",
+            "max_power_w",
+            "target_soc",
+            "end_time",
+            "min_soc",
+            "consumption_peak_kw",
+            "safety_floor_w",
+        }
+    )
 
     def __init__(
         self,
@@ -509,6 +506,15 @@ class OverrideStatusSensor(SensorEntity):
         self._attr_translation_key = "override_status"
         self._attr_device_info = device_info
         self.hass = hass
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to coordinator updates for instant state changes."""
+        dd = get_domain_data(self.hass, self._domain)
+        ed = dd.entries.get(self._entry.entry_id)
+        if ed is not None and ed.coordinator is not None:
+            self.async_on_remove(
+                ed.coordinator.async_add_listener(self.async_write_ha_state)
+            )
 
     @property
     def native_value(self) -> str:
@@ -573,7 +579,7 @@ class OverrideStatusSensor(SensorEntity):
                 if is_effectively_charging(self.hass, self._domain, cs)
                 else "deferred"
             )
-            return {
+            attrs: dict[str, Any] = {
                 "mode": "smart_charge",
                 "phase": phase,
                 "power_w": cs.get("last_power_w", 0),
@@ -581,6 +587,10 @@ class OverrideStatusSensor(SensorEntity):
                 "target_soc": cs.get("target_soc"),
                 "end_time": cs["end"].isoformat(),
             }
+            if cs.get("circuit_open"):
+                attrs["circuit_breaker_active"] = True
+                attrs["circuit_breaker_since"] = cs.get("circuit_open_since")
+            return attrs
 
         ds = get_discharge_state(self.hass, self._domain)
         if ds is not None:
@@ -590,7 +600,7 @@ class OverrideStatusSensor(SensorEntity):
             peak = ds.get("consumption_peak_kw", 0.0)
             from .algorithms import safety_floor_w
 
-            return {
+            ds_attrs: dict[str, Any] = {
                 "mode": "smart_discharge",
                 "phase": phase,
                 "power_w": ds.get("last_power_w", 0),
@@ -599,17 +609,41 @@ class OverrideStatusSensor(SensorEntity):
                 "consumption_peak_kw": round(peak, 2),
                 "safety_floor_w": safety_floor_w(peak),
             }
+            if ds.get("circuit_open"):
+                ds_attrs["circuit_breaker_active"] = True
+                ds_attrs["circuit_breaker_since"] = ds.get("circuit_open_since")
+            return ds_attrs
 
         return None
 
 
-class SmartOperationsOverviewSensor(SensorEntity):
+class SmartOperationsOverviewSensor(RestoreSensor):
     """Dashboard sensor providing a rich overview of smart operations."""
 
     _attr_has_entity_name = True
     _attr_should_poll = True
     _attr_translation_key = "smart_operations"
     _attr_device_class = SensorDeviceClass.ENUM
+    _unrecorded_attributes = frozenset(
+        {
+            "charge_power_w",
+            "charge_current_soc",
+            "charge_confirmed_soc",
+            "charge_remaining",
+            "charge_target_reachable",
+            "discharge_power_w",
+            "discharge_target_power_w",
+            "discharge_current_soc",
+            "discharge_confirmed_soc",
+            "discharge_remaining",
+            "discharge_feedin_used_kwh",
+            "discharge_feedin_projected_kwh",
+            "has_error",
+            "last_error",
+            "last_error_at",
+            "error_count",
+        }
+    )
 
     def __init__(
         self,
@@ -635,6 +669,23 @@ class SmartOperationsOverviewSensor(SensorEntity):
             "charge_discharge_active",
         ]
         self.hass = hass
+        self._restored_state: str | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore last state and subscribe to coordinator updates."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_sensor_data()
+        if last_data and last_data.native_value:
+            self._restored_state = str(last_data.native_value)
+        entry_data = getattr(self._entry, "runtime_data", None)
+        coordinator = getattr(entry_data, "coordinator", None) if entry_data else None
+        if coordinator is not None:
+
+            def _on_coordinator_update() -> None:
+                self._restored_state = None
+                self.async_write_ha_state()
+
+            self.async_on_remove(coordinator.async_add_listener(_on_coordinator_update))
 
     @property
     def native_value(self) -> str:
@@ -664,9 +715,12 @@ class SmartOperationsOverviewSensor(SensorEntity):
                 return "discharge_suspended"
             return "discharging"
 
-        err = self.hass.data.get(self._domain, {}).get("_smart_error_state")
+        err = get_domain_data(self.hass, self._domain).smart_error_state
         if err and err.get("last_error"):
             return "error"
+
+        if self._restored_state and self._restored_state in (self._attr_options or ()):
+            return self._restored_state
 
         return "idle"
 
@@ -689,7 +743,7 @@ class SmartOperationsOverviewSensor(SensorEntity):
         cs = get_charge_state(self.hass, self._domain)
         ds = get_discharge_state(self.hass, self._domain)
 
-        err = self.hass.data.get(self._domain, {}).get("_smart_error_state", {})
+        err = get_domain_data(self.hass, self._domain).smart_error_state or {}
         attrs: dict[str, Any] = {
             "charge_active": cs is not None,
             "discharge_active": ds is not None,
@@ -725,6 +779,9 @@ class SmartOperationsOverviewSensor(SensorEntity):
                     "charge_target_reachable": self._is_charge_reachable(cs, soc),
                 }
             )
+            if cs.get("circuit_open"):
+                attrs["circuit_breaker_active"] = True
+                attrs["circuit_breaker_since"] = cs.get("circuit_open_since")
 
         if ds is not None:
             soc = get_interpolated_soc(self.hass, self._domain)
@@ -763,6 +820,7 @@ class SmartOperationsOverviewSensor(SensorEntity):
                 {
                     "discharge_phase": discharge_phase,
                     "discharge_power_w": ds_power,
+                    "discharge_target_power_w": ds.get("target_power_w", ds_power),
                     "discharge_max_power_w": ds.get("max_power_w"),
                     "discharge_min_soc": ds.get("min_soc"),
                     "discharge_current_soc": soc,
@@ -782,6 +840,9 @@ class SmartOperationsOverviewSensor(SensorEntity):
                     "discharge_feedin_projected_kwh": feedin_projected,
                 }
             )
+            if ds.get("circuit_open"):
+                attrs["circuit_breaker_active"] = True
+                attrs["circuit_breaker_since"] = ds.get("circuit_open_since")
 
         return attrs
 
@@ -801,7 +862,7 @@ class SmartOperationsOverviewSensor(SensorEntity):
         if remaining_h <= 0:
             return None
         capacity = get_battery_capacity_kwh(self.hass, self._domain)
-        taper = self.hass.data.get(self._domain, {}).get("_taper_profile")
+        taper = get_domain_data(self.hass, self._domain).taper_profile
         return is_charge_target_reachable(
             soc,
             cs.get("target_soc", 100),
@@ -1037,6 +1098,7 @@ class BatteryForecastSensor(SensorEntity):
     _attr_should_poll = True
     _attr_icon = ICON_FORECAST
     _attr_native_unit_of_measurement = "%"
+    _unrecorded_attributes = frozenset({"forecast"})
 
     def __init__(
         self,
@@ -1098,17 +1160,11 @@ class SmartChargeActiveSensor(BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        domain_data = self.hass.data.get(self._domain)
-        if domain_data is None:
-            return False
-        return domain_data.get("_smart_charge_state") is not None
+        return get_charge_state(self.hass, self._domain) is not None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        domain_data = self.hass.data.get(self._domain)
-        if domain_data is None:
-            return None
-        state = domain_data.get("_smart_charge_state")
+        state = get_charge_state(self.hass, self._domain)
         if state is None:
             return None
         phase = "charging" if state.get("charging_started", True) else "deferred"
@@ -1145,17 +1201,11 @@ class SmartDischargeActiveSensor(BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        domain_data = self.hass.data.get(self._domain)
-        if domain_data is None:
-            return False
-        return domain_data.get("_smart_discharge_state") is not None
+        return get_discharge_state(self.hass, self._domain) is not None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        domain_data = self.hass.data.get(self._domain)
-        if domain_data is None:
-            return None
-        state = domain_data.get("_smart_discharge_state")
+        state = get_discharge_state(self.hass, self._domain)
         if state is None:
             return None
         end = state.get("end")

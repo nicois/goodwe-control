@@ -4,6 +4,8 @@ Brand-specific constants (API keys, device serials, polled variable lists)
 remain in each brand's own ``const.py``.
 """
 
+from homeassistant.const import Platform
+
 # --- Battery & algorithm configuration ---
 CONF_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 CONF_MIN_POWER_CHANGE = "min_power_change"
@@ -33,7 +35,7 @@ CONF_LOADS_POWER_ENTITY = "loads_power_entity"
 CONF_PV_POWER_ENTITY = "pv_power_entity"
 CONF_FEEDIN_ENERGY_ENTITY = "feedin_energy_entity"
 
-PLATFORMS: list[str] = ["binary_sensor", "sensor"]
+PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 # --- Service names ---
 SERVICE_CLEAR_OVERRIDES = "clear_overrides"
@@ -50,5 +52,15 @@ SMART_DISCHARGE_CHECK_SECONDS = 60  # 1 minute
 # Cancel a smart session if the SoC entity is unavailable for this many
 # consecutive periodic checks (3 x 5 min = 15 minutes).
 MAX_SOC_UNAVAILABLE_COUNT = 3
+
+# Cancel a smart session after this many consecutive adapter errors
+# (e.g. API timeout, device offline).  With 5-min charge ticks this
+# gives ~15 min of tolerance; with 1-min discharge ticks, ~3 min.
+MAX_CONSECUTIVE_ADAPTER_ERRORS = 3
+
+# After the circuit breaker opens (MAX_CONSECUTIVE_ADAPTER_ERRORS reached),
+# hold position for this many additional ticks before aborting.  With 5-min
+# charge ticks this gives ~25 min; with 1-min discharge ticks, ~5 min.
+CIRCUIT_BREAKER_TICKS_BEFORE_ABORT = 5
 
 STORAGE_VERSION = 1

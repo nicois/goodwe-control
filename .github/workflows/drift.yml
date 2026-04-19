@@ -7,14 +7,11 @@ on:
     # Daily check — catches upstream changes in foxess-control
     - cron: "0 6 * * *"
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   drift:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Fetch canonical smart_battery from foxess-control
         run: |

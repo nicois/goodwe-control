@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from homeassistant.helpers.storage import Store
 
 _LOGGER = logging.getLogger(__name__)
+_SAVE_DELAY = 60
 
 
 async def load_taper_profile(
@@ -41,12 +42,17 @@ async def save_session(
     key: str,
     data: dict[str, Any],
 ) -> None:
-    """Persist a smart session to storage."""
+    """Persist a smart session to storage.
+
+    Uses ``async_delay_save`` to coalesce frequent writes (e.g. every
+    listener tick) into a single disk write.  ``EVENT_HOMEASSISTANT_FINAL_WRITE``
+    guarantees a flush at shutdown so no data is lost.
+    """
     if store is None:
         return
     stored: dict[str, Any] = await store.async_load() or {}
     stored[key] = data
-    await store.async_save(stored)
+    store.async_delay_save(lambda: stored, _SAVE_DELAY)
 
 
 async def clear_stored_session(
@@ -60,6 +66,13 @@ async def clear_stored_session(
     if key in stored:
         del stored[key]
         await store.async_save(stored)
+
+
+def _serialise_groups(groups: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Serialise schedule groups for storage (cloud mode only)."""
+    if not groups:
+        return []
+    return [dict(g) for g in groups]
 
 
 def session_data_from_charge_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -85,6 +98,7 @@ def session_data_from_charge_state(state: dict[str, Any]) -> dict[str, Any]:
         ),
         "charging_started_energy_kwh": state.get("charging_started_energy_kwh"),
         "start_soc": state.get("start_soc"),
+        "groups": _serialise_groups(state.get("groups")),
     }
 
 
@@ -113,6 +127,7 @@ def session_data_from_discharge_state(state: dict[str, Any]) -> dict[str, Any]:
     data["discharging_started_at"] = started_at.isoformat() if started_at else None
     data["consumption_peak_kw"] = state.get("consumption_peak_kw", 0.0)
     data["start_soc"] = state.get("start_soc")
+    data["groups"] = _serialise_groups(state.get("groups"))
     return data
 
 
@@ -125,16 +140,25 @@ def cancel_smart_session(
     hass: HomeAssistant,
     *,
     clear_storage: bool = True,
-) -> None:
-    """Cancel an active smart session — unsubscribe listeners and clear state."""
+) -> Any:
+    """Cancel an active smart session — unsubscribe listeners and clear state.
+
+    Returns whatever the ``_on_session_cancel`` hook returns (typically a
+    coroutine for deferred WS shutdown that the caller should await after
+    the override removal completes).
+    """
     unsubs: list[Callable[[], None]] = domain_data.get(unsubs_key, [])
     for unsub in unsubs:
         unsub()
     domain_data[unsubs_key] = []
     domain_data.pop(state_key, None)
     if clear_storage and store is not None:
-        hass.async_create_task(clear_stored_session(store, storage_key))
+        hass.async_create_task(
+            clear_stored_session(store, storage_key),
+            name=f"smart_battery_clear_{storage_key}",
+        )
     # Brand-specific post-cancel hook (e.g., stop WebSocket)
     hook = domain_data.get("_on_session_cancel")
     if hook is not None:
-        hook()
+        return hook()
+    return None

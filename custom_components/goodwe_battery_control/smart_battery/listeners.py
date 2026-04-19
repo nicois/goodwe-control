@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import sys
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.event import (
@@ -27,11 +28,14 @@ from .algorithms import (
     should_suspend_discharge,
 )
 from .const import (
+    CIRCUIT_BREAKER_TICKS_BEFORE_ABORT,
     DEFAULT_MIN_POWER_CHANGE,
+    MAX_CONSECUTIVE_ADAPTER_ERRORS,
     MAX_SOC_UNAVAILABLE_COUNT,
     SMART_CHARGE_ADJUST_SECONDS,
     SMART_DISCHARGE_CHECK_SECONDS,
 )
+from .domain_data import get_domain_data, get_first_coordinator
 from .session import (
     cancel_smart_session,
     save_session,
@@ -51,27 +55,39 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
+def _exc_summary() -> str:
+    """One-line summary of the current exception for warning-level logs."""
+    exc = sys.exc_info()[1]
+    return f"{type(exc).__name__}: {exc}" if exc else "unknown"
+
+
+def _notify_replay(
+    hass: HomeAssistant,
+    domain: str,
+    session_type: str,
+    state: dict[str, Any],
+) -> None:
+    """Notify the brand integration that a session is eligible for replay."""
+    dd = get_domain_data(hass, domain)
+    callback = getattr(dd, "on_circuit_breaker_abort", None)
+    if callback is not None:
+        callback(session_type, state)
+
+
 def _get_coordinator_value(
     hass: HomeAssistant,
     domain: str,
     variable: str,
 ) -> float | None:
     """Read a numeric variable from the first coordinator in domain data."""
-    domain_data = hass.data.get(domain)
-    if domain_data is None:
-        return None
-    for key in domain_data:
-        if not str(key).startswith("_"):
-            entry_data = domain_data.get(key)
-            if isinstance(entry_data, dict):
-                coordinator = entry_data.get("coordinator")
-                if coordinator is not None and coordinator.data:
-                    raw = coordinator.data.get(variable)
-                    if raw is not None:
-                        try:
-                            return float(raw)
-                        except (ValueError, TypeError):
-                            return None
+    coordinator = get_first_coordinator(hass, domain)
+    if coordinator is not None and coordinator.data:
+        raw = coordinator.data.get(variable)
+        if raw is not None:
+            try:
+                return float(raw)
+            except (ValueError, TypeError):
+                return None
     return None
 
 
@@ -82,21 +98,14 @@ def _get_current_soc(hass: HomeAssistant, domain: str) -> float | None:
 
 def _get_net_consumption(hass: HomeAssistant, domain: str) -> float:
     """Return net site consumption (loads minus solar) in kW."""
-    domain_data = hass.data.get(domain)
-    if domain_data is None:
-        return 0.0
-    for key in domain_data:
-        if not str(key).startswith("_"):
-            entry_data = domain_data.get(key)
-            if isinstance(entry_data, dict):
-                coordinator = entry_data.get("coordinator")
-                if coordinator is not None and coordinator.data:
-                    try:
-                        loads = float(coordinator.data.get("loadsPower", 0))
-                        pv = float(coordinator.data.get("pvPower", 0))
-                        return loads - pv
-                    except (ValueError, TypeError):
-                        return 0.0
+    coordinator = get_first_coordinator(hass, domain)
+    if coordinator is not None and coordinator.data:
+        try:
+            loads = float(coordinator.data.get("loadsPower", 0))
+            pv = float(coordinator.data.get("pvPower", 0))
+            return loads - pv
+        except (ValueError, TypeError):
+            return 0.0
     return 0.0
 
 
@@ -109,17 +118,12 @@ def _get_smart_headroom(hass: HomeAssistant, domain: str) -> float:
     """Return the charge headroom as a fraction (e.g. 0.10 for 10%)."""
     from .const import CONF_SMART_HEADROOM, DEFAULT_SMART_HEADROOM
 
-    domain_data = hass.data.get(domain, {})
-    for key in domain_data:
-        if not str(key).startswith("_"):
-            entry_data = domain_data.get(key)
-            if isinstance(entry_data, dict):
-                entry = entry_data.get("entry")
-                if entry is not None:
-                    pct: int = entry.options.get(
-                        CONF_SMART_HEADROOM, DEFAULT_SMART_HEADROOM
-                    )
-                    return pct / 100.0
+    dd = get_domain_data(hass, domain)
+    for entry_data in dd.entries.values():
+        entry = getattr(entry_data, "entry", None)
+        if entry is not None:
+            pct: int = entry.options.get(CONF_SMART_HEADROOM, DEFAULT_SMART_HEADROOM)
+            return pct / 100.0
     return DEFAULT_SMART_HEADROOM / 100.0
 
 
@@ -127,20 +131,15 @@ def _get_polling_interval_seconds(hass: HomeAssistant, domain: str) -> int:
     """Return the coordinator's polling interval in seconds."""
     from .const import DEFAULT_POLLING_INTERVAL
 
-    domain_data = hass.data.get(domain, {})
-    for key in domain_data:
-        if not str(key).startswith("_"):
-            entry_data = domain_data.get(key)
-            if isinstance(entry_data, dict):
-                coordinator = entry_data.get("coordinator")
-                if coordinator is not None and coordinator.update_interval is not None:
-                    return int(coordinator.update_interval.total_seconds())
+    coordinator = get_first_coordinator(hass, domain)
+    if coordinator is not None and coordinator.update_interval is not None:
+        return int(coordinator.update_interval.total_seconds())
     return DEFAULT_POLLING_INTERVAL
 
 
 def _get_store(hass: HomeAssistant, domain: str) -> Store[dict[str, Any]] | None:
     """Return the session Store from domain data."""
-    return hass.data.get(domain, {}).get("_store")  # type: ignore[no-any-return]
+    return get_domain_data(hass, domain).store
 
 
 def _record_error(hass: HomeAssistant, domain: str, message: str) -> None:
@@ -148,12 +147,39 @@ def _record_error(hass: HomeAssistant, domain: str, message: str) -> None:
     domain_data = hass.data.get(domain)
     if domain_data is None:
         return
-    prev = domain_data.get("_smart_error_state", {})
+    prev = domain_data.get("_smart_error_state") or {}
     domain_data["_smart_error_state"] = {
         "last_error": message,
         "last_error_at": dt_util.now().isoformat(),
         "error_count": prev.get("error_count", 0) + 1,
     }
+    _create_session_issue(hass, domain, message)
+
+
+def _create_session_issue(hass: HomeAssistant, domain: str, message: str) -> None:
+    """Surface a session abort as an HA Repair issue."""
+    from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
+
+    session_type = "charge" if "harge" in message else "discharge"
+    async_create_issue(
+        hass,
+        domain,
+        "session_aborted",
+        is_fixable=False,
+        severity=IssueSeverity.WARNING,
+        translation_key="session_aborted",
+        translation_placeholders={
+            "session_type": session_type,
+            "reason": message,
+        },
+    )
+
+
+def _clear_session_issue(hass: HomeAssistant, domain: str) -> None:
+    """Clear the session abort issue when a new session starts."""
+    from homeassistant.helpers.issue_registry import async_delete_issue
+
+    async_delete_issue(hass, domain, "session_aborted")
 
 
 def _get_taper_profile(hass: HomeAssistant, domain: str) -> TaperProfile | None:
@@ -163,7 +189,7 @@ def _get_taper_profile(hass: HomeAssistant, domain: str) -> TaperProfile | None:
     integrations should load it on startup via
     :func:`~smart_battery.session.load_taper_profile`.
     """
-    return hass.data.get(domain, {}).get("_taper_profile")  # type: ignore[no-any-return]
+    return get_domain_data(hass, domain).taper_profile
 
 
 async def _save_taper_profile(
@@ -178,14 +204,45 @@ async def _save_taper_profile(
     await store.async_save(stored)
 
 
+def _record_taper_observation(
+    hass: HomeAssistant,
+    domain: str,
+    taper: TaperProfile | None,
+    cur_state: dict[str, Any],
+    soc: float,
+    coordinator_var: str,
+    record_fn_name: str,
+    save_every: int,
+) -> None:
+    """Record a taper observation if conditions are met.
+
+    Shared between charge and discharge listeners.
+    """
+    if taper is None or cur_state.get("last_power_w", 0) < 500:
+        return
+    actual_kw = _get_coordinator_value(hass, domain, coordinator_var)
+    if actual_kw is None:
+        return
+    getattr(taper, record_fn_name)(soc, cur_state["last_power_w"], actual_kw * 1000)
+    cur_state["taper_tick"] = cur_state.get("taper_tick", 0) + 1
+    if cur_state["taper_tick"] % save_every == 0:
+        hass.async_create_task(
+            _save_taper_profile(hass, domain, taper), name=f"{domain}_save_taper"
+        )
+
+
 def cancel_smart_charge(
     hass: HomeAssistant,
     domain: str,
     *,
     clear_storage: bool = True,
-) -> None:
-    """Cancel any active smart charge listeners and clear stored session."""
-    cancel_smart_session(
+) -> Any:
+    """Cancel any active smart charge listeners and clear stored session.
+
+    Returns the deferred WS shutdown coroutine (if any) from the cancel hook.
+    Callers should await it AFTER override removal completes.
+    """
+    return cancel_smart_session(
         hass.data[domain],
         "_smart_charge_state",
         "_smart_charge_unsubs",
@@ -201,9 +258,13 @@ def cancel_smart_discharge(
     domain: str,
     *,
     clear_storage: bool = True,
-) -> None:
-    """Cancel any active smart discharge listeners and clear stored session."""
-    cancel_smart_session(
+) -> Any:
+    """Cancel any active smart discharge listeners and clear stored session.
+
+    Returns the deferred WS shutdown coroutine (if any) from the cancel hook.
+    Callers should await it AFTER override removal completes.
+    """
+    return cancel_smart_session(
         hass.data[domain],
         "_smart_discharge_state",
         "_smart_discharge_unsubs",
@@ -218,20 +279,33 @@ def setup_smart_charge_listeners(
     hass: HomeAssistant,
     domain: str,
     adapter: InverterAdapter,
-) -> None:
+) -> Any:
     """Register HA listeners for an active smart charge session.
+
+    Returns the periodic callback so callers can wrap it (e.g. with
+    a WebSocket reconnect check).
 
     Reads all parameters from ``hass.data[domain]["_smart_charge_state"]``.
     """
     from .types import WorkMode
 
+    _clear_session_issue(hass, domain)
     state = hass.data[domain]["_smart_charge_state"]
     end: datetime.datetime = state["end"]
     end_utc = dt_util.as_utc(end)
     my_session_id: str = state["session_id"]
 
     async def _remove_charge_override() -> None:
-        await adapter.remove_override(hass, WorkMode.FORCE_CHARGE)
+        try:
+            await adapter.remove_override(hass, WorkMode.FORCE_CHARGE)
+        except Exception:
+            _LOGGER.warning(
+                "Smart charge: override removal failed, scheduling retry: %s",
+                _exc_summary(),
+            )
+            hass.data[domain]["_pending_override_cleanup"] = {
+                "mode": WorkMode.FORCE_CHARGE.value,
+            }
 
     def _is_my_session() -> bool:
         cur = hass.data[domain].get("_smart_charge_state")
@@ -246,28 +320,88 @@ def setup_smart_charge_listeners(
             .get("_smart_charge_state", {})
             .get("charging_started", False)
         )
-        cancel_smart_charge(hass, domain)
+        ws_stop = cancel_smart_charge(hass, domain)
         if charging_started:
             await _remove_charge_override()
+        if ws_stop is not None:
+            await ws_stop
 
     async def _adjust_charge_power(_now: datetime.datetime) -> None:
         cur_state = hass.data[domain].get("_smart_charge_state")
         if cur_state is None or cur_state.get("session_id") != my_session_id:
             return
 
+        if cur_state.get("circuit_open"):
+            ticks = cur_state.get("circuit_open_ticks", 0) + 1
+            cur_state["circuit_open_ticks"] = ticks
+            if ticks >= CIRCUIT_BREAKER_TICKS_BEFORE_ABORT:
+                try:
+                    _soc = _get_current_soc(hass, domain)
+                except Exception:
+                    _soc = None
+                _LOGGER.error(
+                    "Smart charge: circuit breaker open for %d ticks, "
+                    "aborting session (SoC=%s)",
+                    ticks,
+                    _soc,
+                )
+                _record_error(
+                    hass,
+                    domain,
+                    "Charge session aborted: adapter unreachable",
+                )
+                _notify_replay(hass, domain, "charge", dict(cur_state))
+                try:
+                    charging_started = cur_state.get("charging_started", False)
+                    if _is_my_session():
+                        ws_stop = cancel_smart_charge(hass, domain)
+                        if charging_started:
+                            await _remove_charge_override()
+                        if ws_stop is not None:
+                            await ws_stop
+                except Exception:
+                    _LOGGER.exception("Smart charge: cleanup also failed")
+                return
+            _LOGGER.warning(
+                "Smart charge: circuit breaker open, holding position (tick %d/%d)",
+                ticks,
+                CIRCUIT_BREAKER_TICKS_BEFORE_ABORT,
+            )
+            return
+
         try:
             await _adjust_charge_power_inner(cur_state)
+            cur_state["consecutive_error_count"] = 0
+            if cur_state.get("circuit_open"):
+                _LOGGER.info("Smart charge: adapter recovered, circuit breaker reset")
+                cur_state["circuit_open"] = False
+                cur_state["circuit_open_ticks"] = 0
+                cur_state.pop("circuit_open_since", None)
         except Exception:
-            _LOGGER.exception("Smart charge: unexpected error, aborting session")
-            _record_error(hass, domain, "Charge session aborted: unexpected error")
-            try:
-                charging_started = cur_state.get("charging_started", False)
-                if _is_my_session():
-                    cancel_smart_charge(hass, domain)
-                    if charging_started:
-                        await _remove_charge_override()
-            except Exception:
-                _LOGGER.exception("Smart charge: cleanup also failed")
+            count = cur_state.get("consecutive_error_count", 0) + 1
+            cur_state["consecutive_error_count"] = count
+            if count < MAX_CONSECUTIVE_ADAPTER_ERRORS:
+                _LOGGER.warning(
+                    "Smart charge: transient error (%d/%d), will retry: %s",
+                    count,
+                    MAX_CONSECUTIVE_ADAPTER_ERRORS,
+                    _exc_summary(),
+                )
+                return
+            cur_state["circuit_open"] = True
+            cur_state["circuit_open_ticks"] = 0
+            cur_state["circuit_open_since"] = dt_util.now().isoformat()
+            _LOGGER.warning(
+                "Smart charge: %d consecutive errors, circuit breaker open "
+                "(holding position for up to %d ticks)",
+                count,
+                CIRCUIT_BREAKER_TICKS_BEFORE_ABORT,
+            )
+            _record_error(
+                hass,
+                domain,
+                "Charge: adapter errors, holding position (circuit breaker)",
+            )
 
     async def _adjust_charge_power_inner(
         cur_state: dict[str, Any],
@@ -287,9 +421,11 @@ def setup_smart_charge_listeners(
                 )
                 charging_started = cur_state.get("charging_started", False)
                 if _is_my_session():
-                    cancel_smart_charge(hass, domain)
+                    ws_stop = cancel_smart_charge(hass, domain)
                     if charging_started:
                         await _remove_charge_override()
+                    if ws_stop is not None:
+                        await ws_stop
                 return
             _LOGGER.debug("Smart charge: SoC unavailable, skipping adjustment")
             return
@@ -322,29 +458,28 @@ def setup_smart_charge_listeners(
             _LOGGER.info("Smart charge: window expired during adjustment, reverting")
             charging_started = cur_state.get("charging_started", False)
             if _is_my_session():
-                cancel_smart_charge(hass, domain)
+                ws_stop = cancel_smart_charge(hass, domain)
                 if charging_started:
                     await _remove_charge_override()
+                if ws_stop is not None:
+                    await ws_stop
             return
 
         net_consumption = _get_net_consumption(hass, domain)
         headroom = _get_smart_headroom(hass, domain)
         taper = _get_taper_profile(hass, domain)
 
-        # Record taper observation from previous tick's requested power
-        if (
-            taper is not None
-            and cur_state.get("charging_started")
-            and cur_state.get("last_power_w", 0) >= 500
-        ):
-            actual_kw = _get_coordinator_value(hass, domain, "batChargePower")
-            if actual_kw is not None:
-                taper.record_charge(
-                    cur_soc, cur_state["last_power_w"], actual_kw * 1000
-                )
-                cur_state["taper_tick"] = cur_state.get("taper_tick", 0) + 1
-                if cur_state["taper_tick"] % 3 == 0:
-                    hass.async_create_task(_save_taper_profile(hass, domain, taper))
+        if cur_state.get("charging_started"):
+            _record_taper_observation(
+                hass,
+                domain,
+                taper,
+                cur_state,
+                cur_soc,
+                "batChargePower",
+                "record_charge",
+                save_every=3,
+            )
 
         if not cur_state["charging_started"]:
             # Check if it's time to start deferred charging
@@ -385,7 +520,7 @@ def setup_smart_charge_listeners(
                 headroom=headroom,
                 taper_profile=taper,
             )
-            await adapter.apply_mode(hass, WorkMode.FORCE_CHARGE, new_power)
+            await adapter.apply_mode(hass, WorkMode.FORCE_CHARGE, new_power, fd_soc=100)
 
             # Re-check state after await
             if not _is_my_session():
@@ -465,7 +600,7 @@ def setup_smart_charge_listeners(
             )
 
         cur_state["last_power_w"] = new_power
-        await adapter.apply_mode(hass, WorkMode.FORCE_CHARGE, new_power)
+        await adapter.apply_mode(hass, WorkMode.FORCE_CHARGE, new_power, fd_soc=100)
 
         # Re-check state after await
         if not _is_my_session():
@@ -485,6 +620,7 @@ def setup_smart_charge_listeners(
         ),
     ]
     hass.data[domain]["_smart_charge_unsubs"] = unsubs
+    return _adjust_charge_power
 
 
 def setup_smart_discharge_listeners(
@@ -498,13 +634,23 @@ def setup_smart_discharge_listeners(
     """
     from .types import WorkMode
 
+    _clear_session_issue(hass, domain)
     state = hass.data[domain]["_smart_discharge_state"]
     end: datetime.datetime = state["end"]
     end_utc = dt_util.as_utc(end)
     my_session_id: str = state["session_id"]
 
     async def _remove_discharge_override() -> None:
-        await adapter.remove_override(hass, WorkMode.FORCE_DISCHARGE)
+        try:
+            await adapter.remove_override(hass, WorkMode.FORCE_DISCHARGE)
+        except Exception:
+            _LOGGER.warning(
+                "Smart discharge: override removal failed, scheduling retry: %s",
+                _exc_summary(),
+            )
+            hass.data[domain]["_pending_override_cleanup"] = {
+                "mode": WorkMode.FORCE_DISCHARGE.value,
+            }
 
     def _is_my_session() -> bool:
         cur = hass.data[domain].get("_smart_discharge_state")
@@ -528,28 +674,90 @@ def setup_smart_discharge_listeners(
         cur = hass.data[domain].get("_smart_discharge_state")
         was_active = cur is not None and cur.get("discharging_started", True)
         _log_session_end("window ended, removing override")
-        cancel_smart_discharge(hass, domain)
+        ws_stop = cancel_smart_discharge(hass, domain)
         if was_active:
             await _remove_discharge_override()
+        if ws_stop is not None:
+            await ws_stop
 
     async def _check_discharge_soc(_now: datetime.datetime) -> None:
         cur_state = hass.data[domain].get("_smart_discharge_state")
         if cur_state is None or cur_state.get("session_id") != my_session_id:
             return
 
+        if cur_state.get("circuit_open"):
+            ticks = cur_state.get("circuit_open_ticks", 0) + 1
+            cur_state["circuit_open_ticks"] = ticks
+            if ticks >= CIRCUIT_BREAKER_TICKS_BEFORE_ABORT:
+                try:
+                    _soc = _get_current_soc(hass, domain)
+                except Exception:
+                    _soc = None
+                _LOGGER.error(
+                    "Smart discharge: circuit breaker open for %d ticks, "
+                    "aborting session (SoC=%s)",
+                    ticks,
+                    _soc,
+                )
+                _record_error(
+                    hass,
+                    domain,
+                    "Discharge session aborted: adapter unreachable",
+                )
+                _notify_replay(hass, domain, "discharge", dict(cur_state))
+                try:
+                    discharging_started = cur_state.get("discharging_started", False)
+                    if _is_my_session():
+                        ws_stop = cancel_smart_discharge(hass, domain)
+                        if discharging_started:
+                            await _remove_discharge_override()
+                        if ws_stop is not None:
+                            await ws_stop
+                except Exception:
+                    _LOGGER.exception("Smart discharge: cleanup also failed")
+                return
+            _LOGGER.warning(
+                "Smart discharge: circuit breaker open, holding position (tick %d/%d)",
+                ticks,
+                CIRCUIT_BREAKER_TICKS_BEFORE_ABORT,
+            )
+            return
+
         try:
             await _check_discharge_soc_inner(cur_state)
+            cur_state["consecutive_error_count"] = 0
+            if cur_state.get("circuit_open"):
+                _LOGGER.info(
+                    "Smart discharge: adapter recovered, circuit breaker reset"
+                )
+                cur_state["circuit_open"] = False
+                cur_state["circuit_open_ticks"] = 0
+                cur_state.pop("circuit_open_since", None)
         except Exception:
-            _LOGGER.exception("Smart discharge: unexpected error, aborting session")
-            _record_error(hass, domain, "Discharge session aborted: unexpected error")
-            try:
-                discharging_started = cur_state.get("discharging_started", False)
-                if _is_my_session():
-                    cancel_smart_discharge(hass, domain)
-                    if discharging_started:
-                        await _remove_discharge_override()
-            except Exception:
-                _LOGGER.exception("Smart discharge: cleanup also failed")
+            count = cur_state.get("consecutive_error_count", 0) + 1
+            cur_state["consecutive_error_count"] = count
+            if count < MAX_CONSECUTIVE_ADAPTER_ERRORS:
+                _LOGGER.warning(
+                    "Smart discharge: transient error (%d/%d), will retry: %s",
+                    count,
+                    MAX_CONSECUTIVE_ADAPTER_ERRORS,
+                    _exc_summary(),
+                )
+                return
+            cur_state["circuit_open"] = True
+            cur_state["circuit_open_ticks"] = 0
+            cur_state["circuit_open_since"] = dt_util.now().isoformat()
+            _LOGGER.warning(
+                "Smart discharge: %d consecutive errors, circuit breaker open "
+                "(holding position for up to %d ticks)",
+                count,
+                CIRCUIT_BREAKER_TICKS_BEFORE_ABORT,
+            )
+            _record_error(
+                hass,
+                domain,
+                "Discharge: adapter errors, holding position (circuit breaker)",
+            )
 
     async def _check_discharge_soc_inner(
         cur_state: dict[str, Any],
@@ -575,6 +783,7 @@ def setup_smart_discharge_listeners(
                     cur_state["max_power_w"],
                     cur_state["end"],
                     net_consumption_kw=_get_net_consumption(hass, domain),
+                    start=cur_state.get("start"),
                     headroom=_get_smart_headroom(hass, domain),
                     taper_profile=taper,
                     feedin_energy_limit_kwh=cur_state.get("feedin_energy_limit_kwh"),
@@ -650,7 +859,8 @@ def setup_smart_discharge_listeners(
                             _get_store(hass, domain),
                             "smart_discharge",
                             session_data_from_discharge_state(cur_state),
-                        )
+                        ),
+                        name=f"{domain}_save_discharge_session",
                     )
                 else:
                     exported = feedin_now - feedin_start
@@ -661,8 +871,10 @@ def setup_smart_discharge_listeners(
                                 f"reached limit {feedin_limit:.2f} kWh, "
                                 "removing override"
                             )
-                            cancel_smart_discharge(hass, domain)
+                            ws_stop = cancel_smart_discharge(hass, domain)
                             await _remove_discharge_override()
+                            if ws_stop is not None:
+                                await ws_stop
                         return
 
                     remaining_kwh = feedin_limit - exported
@@ -703,8 +915,10 @@ def setup_smart_discharge_listeners(
                             _log_session_end(
                                 "early stop triggered (feed-in target ~reached)"
                             )
-                            cancel_smart_discharge(hass, domain)
+                            ws_stop = cancel_smart_discharge(hass, domain)
                             await _remove_discharge_override()
+                            if ws_stop is not None:
+                                await ws_stop
 
                         unsub = async_track_point_in_time(hass, _early_stop, stop_at)
                         hass.data[domain].setdefault(
@@ -726,29 +940,28 @@ def setup_smart_discharge_listeners(
                 _record_error(hass, domain, "Discharge aborted: SoC unavailable")
                 discharging_started = cur_state.get("discharging_started", False)
                 if _is_my_session():
-                    cancel_smart_discharge(hass, domain)
+                    ws_stop = cancel_smart_discharge(hass, domain)
                     if discharging_started:
                         await _remove_discharge_override()
+                    if ws_stop is not None:
+                        await ws_stop
                 return
             _LOGGER.debug("Smart discharge: SoC unavailable, skipping adjustment")
             return
         cur_state["soc_unavailable_count"] = 0
 
-        # Record taper observation for discharge
         taper = _get_taper_profile(hass, domain)
-        if (
-            taper is not None
-            and cur_state.get("last_power_w", 0) >= 500
-            and not cur_state.get("suspended", False)
-        ):
-            actual_kw = _get_coordinator_value(hass, domain, "batDischargePower")
-            if actual_kw is not None:
-                taper.record_discharge(
-                    soc_value, cur_state["last_power_w"], actual_kw * 1000
-                )
-                cur_state["taper_tick"] = cur_state.get("taper_tick", 0) + 1
-                if cur_state["taper_tick"] % 5 == 0:
-                    hass.async_create_task(_save_taper_profile(hass, domain, taper))
+        if not cur_state.get("suspended", False):
+            _record_taper_observation(
+                hass,
+                domain,
+                taper,
+                cur_state,
+                soc_value,
+                "batDischargePower",
+                "record_discharge",
+                save_every=5,
+            )
 
         if cur_state.get("pacing_enabled") and soc_value > cur_state["min_soc"]:
             now_dt = dt_util.now()
@@ -816,27 +1029,33 @@ def setup_smart_discharge_listeners(
                     consumption_peak_kw=peak,
                 )
                 min_change = cur_state.get("min_power_change", DEFAULT_MIN_POWER_CHANGE)
-                power_delta = abs(new_power - cur_state["last_power_w"])
-                should_update = (
-                    power_delta >= min_change or new_power == cur_state["max_power_w"]
-                ) and new_power != cur_state["last_power_w"]
-                # Always re-apply when resuming from suspension
-                if was_suspended and not cur_state.get("suspended"):
-                    should_update = True
-                if should_update:
+                # Always track the algorithm's target for display,
+                # even when the threshold blocks the schedule update.
+                cur_state["target_power_w"] = new_power
+
+                # When feed-in pacing is active and the target is below
+                # the threshold, treat it as self-use: the inverter
+                # covers house load from battery without exporting.
+                # This handles both ramp-up (target hasn't reached
+                # threshold yet) and ramp-down (target dropped below
+                # threshold from a higher rate).
+                feedin_self_use = (
+                    feedin_remaining_for_pacing is not None
+                    and new_power < min_change
+                    and cur_state["last_power_w"] != 0
+                )
+                if feedin_self_use:
                     _LOGGER.info(
-                        "Smart discharge: adjusting power %dW -> %dW "
-                        "(SoC=%.1f%%, remaining=%.2fh)",
-                        cur_state["last_power_w"],
+                        "Smart discharge: target %dW below threshold "
+                        "%dW, switching to self-use",
                         new_power,
-                        soc_value,
-                        remaining_h,
+                        min_change,
                     )
-                    cur_state["last_power_w"] = new_power
+                    cur_state["last_power_w"] = 0
                     await adapter.apply_mode(
                         hass,
-                        WorkMode.FORCE_DISCHARGE,
-                        new_power,
+                        WorkMode.SELF_USE,
+                        0,
                         fd_soc=cur_state.get("min_soc", 11),
                     )
                     if not _is_my_session():
@@ -848,13 +1067,59 @@ def setup_smart_discharge_listeners(
                         session_data_from_discharge_state(cur_state),
                     )
                 else:
-                    _LOGGER.debug(
-                        "Smart discharge: power change %dW -> %dW "
-                        "below threshold %dW, skipping",
-                        cur_state["last_power_w"],
-                        new_power,
-                        min_change,
+                    power_delta = abs(new_power - cur_state.get("last_power_w", 0))
+                    should_update = (
+                        power_delta >= min_change
+                        or new_power == cur_state["max_power_w"]
                     )
+                    # Always re-apply when resuming from suspension
+                    if was_suspended and not cur_state.get("suspended"):
+                        should_update = True
+
+                    if should_update and new_power != cur_state.get("last_power_w", 0):
+                        _LOGGER.info(
+                            "Smart discharge: adjusting power %dW -> %dW "
+                            "(SoC=%.1f%%, remaining=%.2fh)",
+                            cur_state["last_power_w"],
+                            new_power,
+                            soc_value,
+                            remaining_h,
+                        )
+                        cur_state["last_power_w"] = new_power
+                    elif not should_update and new_power != cur_state.get(
+                        "last_power_w", 0
+                    ):
+                        _LOGGER.debug(
+                            "Smart discharge: power change %dW -> %dW "
+                            "below threshold %dW, skipping",
+                            cur_state["last_power_w"],
+                            new_power,
+                            min_change,
+                        )
+                    else:
+                        _LOGGER.debug(
+                            "Smart discharge: holding at %dW "
+                            "(SoC=%.1f%%, remaining=%.2fh)",
+                            new_power,
+                            soc_value,
+                            remaining_h,
+                        )
+
+                    await adapter.apply_mode(
+                        hass,
+                        WorkMode.FORCE_DISCHARGE,
+                        cur_state["last_power_w"],
+                        fd_soc=cur_state.get("min_soc", 11),
+                    )
+                    if not _is_my_session():
+                        return
+                    cur_state = hass.data[domain]["_smart_discharge_state"]
+                    if should_update:
+                        await save_session(
+                            _get_store(hass, domain),
+                            "smart_discharge",
+                            session_data_from_discharge_state(cur_state),
+                        )
 
         # --- SoC threshold check ---
         if soc_value <= cur_state["min_soc"]:
@@ -875,8 +1140,10 @@ def setup_smart_discharge_listeners(
                     f"SoC {soc_value:.1f}% confirmed at/below "
                     f"threshold {cur_state['min_soc']}%, removing override"
                 )
-                cancel_smart_discharge(hass, domain)
+                ws_stop = cancel_smart_discharge(hass, domain)
                 await _remove_discharge_override()
+                if ws_stop is not None:
+                    await ws_stop
         else:
             cur_state["soc_below_min_count"] = 0
 

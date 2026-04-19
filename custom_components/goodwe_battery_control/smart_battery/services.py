@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import uuid
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
@@ -23,9 +22,11 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
 from .algorithms import (
+    DISCHARGE_SAFETY_FACTOR,
     calculate_charge_power,
     calculate_deferred_start,
     calculate_discharge_deferred_start,
+    compute_safe_schedule_end,
 )
 from .const import (
     CONF_API_MIN_SOC,
@@ -45,9 +46,9 @@ from .const import (
     SERVICE_SMART_CHARGE,
     SERVICE_SMART_DISCHARGE,
 )
+from .domain_data import get_domain_data
 from .listeners import (
     _get_current_soc,
-    _get_feedin_energy_kwh,
     _get_net_consumption,
     cancel_smart_charge,
     cancel_smart_discharge,
@@ -59,7 +60,7 @@ from .session import (
     session_data_from_charge_state,
     session_data_from_discharge_state,
 )
-from .types import WorkMode
+from .types import WorkMode, create_charge_session, create_discharge_session
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -206,14 +207,11 @@ def _get_entry_option(
     default: Any,
 ) -> Any:
     """Read an option from the first config entry."""
-    domain_data = hass.data.get(domain, {})
-    for k in domain_data:
-        if not str(k).startswith("_"):
-            entry_data = domain_data.get(k)
-            if isinstance(entry_data, dict):
-                entry = entry_data.get("entry")
-                if entry is not None:
-                    return entry.options.get(key, default)
+    dd = get_domain_data(hass, domain)
+    for entry_data in dd.entries.values():
+        entry = getattr(entry_data, "entry", None)
+        if entry is not None:
+            return entry.options.get(key, default)
     return default
 
 
@@ -229,7 +227,7 @@ def register_services(
     """
 
     def _get_store() -> Store[dict[str, Any]] | None:
-        return hass.data.get(domain, {}).get("_store")  # type: ignore[no-any-return]
+        return get_domain_data(hass, domain).store
 
     async def handle_clear_overrides(call: ServiceCall) -> None:
         mode_filter: str | None = call.data.get("mode")
@@ -306,7 +304,9 @@ def register_services(
 
         if _get_current_soc(hass, domain) is None:
             raise ServiceValidationError(
-                "Battery SoC is not available. Wait for the poll to complete."
+                "Battery SoC is not available",
+                translation_domain=domain,
+                translation_key="soc_unavailable",
             )
 
         api_min_soc = int(
@@ -337,7 +337,7 @@ def register_services(
                 net_consumption_kw=net_consumption,
                 start=start,
                 headroom=headroom,
-                taper_profile=hass.data.get(domain, {}).get("_taper_profile"),
+                taper_profile=get_domain_data(hass, domain).taper_profile,
                 feedin_energy_limit_kwh=feedin_energy_limit,
             )
             should_defer = now < deferred_start
@@ -388,26 +388,46 @@ def register_services(
             )
         )
 
-        hass.data[domain]["_smart_discharge_state"] = {
-            "session_id": str(uuid.uuid4()),
-            "groups": [],
-            "start": start,
-            "end": end,
-            "min_soc": min_soc,
-            "max_power_w": max_power_w,
-            "last_power_w": initial_power,
-            "soc_below_min_count": 0,
-            "soc_unavailable_count": 0,
-            "feedin_energy_limit_kwh": feedin_energy_limit,
-            "feedin_start_kwh": _get_feedin_energy_kwh(hass, domain),
-            "battery_capacity_kwh": battery_capacity_kwh,
-            "min_power_change": min_power_change,
-            "pacing_enabled": pacing_enabled,
-            "start_soc": current_soc,
-            "discharging_started": not should_defer,
-            "discharging_started_at": None if should_defer else now,
-            "consumption_peak_kw": max(0.0, net_consumption),
-        }
+        # Compute safe schedule horizon for immediate starts (C-027).
+        # adapter.apply_mode sets this on subsequent power adjustments,
+        # but the state dict doesn't exist yet when apply_mode runs
+        # above, so the initial horizon is lost.
+        schedule_horizon: str | None = None
+        if (
+            not should_defer
+            and initial_power > 0
+            and battery_capacity_kwh > 0
+            and current_soc is not None
+        ):
+            safe_end = compute_safe_schedule_end(
+                current_soc,
+                min_soc,
+                battery_capacity_kwh,
+                initial_power,
+                end,
+                safety_factor=DISCHARGE_SAFETY_FACTOR,
+                now=now,
+            )
+            if safe_end != end:
+                schedule_horizon = safe_end.isoformat()
+
+        hass.data[domain]["_smart_discharge_state"] = create_discharge_session(
+            start=start,
+            end=end,
+            min_soc=min_soc,
+            max_power_w=max_power_w,
+            initial_power=initial_power,
+            battery_capacity_kwh=battery_capacity_kwh,
+            min_power_change=min_power_change,
+            pacing_enabled=pacing_enabled,
+            current_soc=current_soc,
+            net_consumption=net_consumption,
+            should_defer=should_defer,
+            now=now,
+            feedin_energy_limit=feedin_energy_limit,
+            schedule_horizon=schedule_horizon,
+            groups=[],
+        )
 
         setup_smart_discharge_listeners(hass, domain, adapter)
 
@@ -429,7 +449,9 @@ def register_services(
 
         if _get_current_soc(hass, domain) is None:
             raise ServiceValidationError(
-                "Battery SoC is not available. Wait for the poll to complete."
+                "Battery SoC is not available",
+                translation_domain=domain,
+                translation_key="soc_unavailable",
             )
 
         battery_capacity_kwh: float = _get_entry_option(
@@ -437,8 +459,9 @@ def register_services(
         )
         if battery_capacity_kwh <= 0:
             raise ServiceValidationError(
-                "Battery capacity (kWh) not configured. Set it in the "
-                "integration options before using smart charge."
+                "Battery capacity (kWh) not configured",
+                translation_domain=domain,
+                translation_key="battery_capacity_not_configured",
             )
 
         min_soc_on_grid = int(
@@ -456,8 +479,13 @@ def register_services(
         current_soc = _get_current_soc(hass, domain)
         if current_soc is not None and current_soc >= target_soc:
             raise ServiceValidationError(
-                f"Current SoC ({current_soc}%) already at or above "
-                f"target ({target_soc}%)"
+                f"Current SoC ({current_soc}%) at or above target ({target_soc}%)",
+                translation_domain=domain,
+                translation_key="soc_above_target",
+                translation_placeholders={
+                    "current_soc": str(current_soc),
+                    "target_soc": str(target_soc),
+                },
             )
 
         cancel_smart_charge(hass, domain)
@@ -483,7 +511,7 @@ def register_services(
                 net_consumption_kw=net_consumption,
                 start=start,
                 headroom=headroom,
-                taper_profile=hass.data.get(domain, {}).get("_taper_profile"),
+                taper_profile=get_domain_data(hass, domain).taper_profile,
             )
             should_defer = now < deferred_start
 
@@ -520,33 +548,22 @@ def register_services(
             )
         )
 
-        hass.data[domain]["_smart_charge_state"] = {
-            "session_id": str(uuid.uuid4()),
-            "groups": [],
-            "start": start,
-            "end": end,
-            "target_soc": target_soc,
-            "battery_capacity_kwh": battery_capacity_kwh,
-            "max_power_w": effective_max_power,
-            "last_power_w": initial_power,
-            "min_soc_on_grid": min_soc_on_grid,
-            "min_power_change": min_power_change,
-            "api_min_soc": api_min_soc,
-            "charging_started": not should_defer,
-            "charging_started_at": None if should_defer else now,
-            "charging_started_energy_kwh": (
-                None
-                if should_defer
-                else (
-                    current_soc / 100.0 * battery_capacity_kwh
-                    if current_soc is not None
-                    else None
-                )
-            ),
-            "force": False,
-            "soc_unavailable_count": 0,
-            "start_soc": current_soc,
-        }
+        hass.data[domain]["_smart_charge_state"] = create_charge_session(
+            start=start,
+            end=end,
+            target_soc=target_soc,
+            battery_capacity_kwh=battery_capacity_kwh,
+            max_power_w=effective_max_power,
+            initial_power=initial_power,
+            min_soc_on_grid=min_soc_on_grid,
+            min_power_change=min_power_change,
+            api_min_soc=api_min_soc,
+            force=False,
+            current_soc=current_soc,
+            should_defer=should_defer,
+            now=now,
+            groups=[],
+        )
 
         setup_smart_charge_listeners(hass, domain, adapter)
 
