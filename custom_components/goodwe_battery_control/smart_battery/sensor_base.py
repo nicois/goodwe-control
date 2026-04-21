@@ -6,6 +6,7 @@ so brand integrations create thin subclasses that bind these values.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.device_registry import DeviceInfo
+
+    from .taper import TaperProfile
 
 # ---------------------------------------------------------------------------
 # Icons
@@ -130,11 +133,20 @@ def get_coordinator_value(hass: HomeAssistant, domain: str, key: str) -> float |
 def get_actual_discharge_power_w(
     hass: HomeAssistant, domain: str, requested_w: int
 ) -> int:
-    """Return observed discharge power, falling back to the requested value."""
+    """Return observed discharge power, falling back to the requested value.
+
+    When ``polled_kw`` is ``None`` (no data from the coordinator), the
+    requested/target value is returned as a best-effort estimate.  When
+    ``polled_kw`` is 0 (battery not discharging — e.g. solar > load),
+    the function returns 0 so the sensor reflects reality rather than
+    showing the *target* power.
+    """
     polled_kw = get_coordinator_value(hass, domain, "batDischargePower")
-    if polled_kw is not None and polled_kw > 0:
-        return min(int(polled_kw * 1000), requested_w)
-    return requested_w
+    if polled_kw is None:
+        return requested_w
+    if polled_kw <= 0:
+        return 0
+    return min(int(polled_kw * 1000), requested_w)
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +314,7 @@ def estimate_charge_remaining(
     soc = get_soc_value(hass, domain)
     capacity_kwh = get_battery_capacity_kwh(hass, domain)
     target_soc: int = cs.get("target_soc", 100)
-    max_power_w: int = cs.get("max_power_w", 0)
+    max_power_w: int = cs.get("effective_max_power_w", cs.get("max_power_w", 0))
     start: datetime.datetime | None = cs.get("start")
     if soc is not None and capacity_kwh > 0 and max_power_w > 0 and soc < target_soc:
         energy_kwh = (target_soc - soc) / 100.0 * capacity_kwh
@@ -340,12 +352,21 @@ def project_soc_series(
     *,
     flat_until: datetime.datetime | None = None,
     direction: int = 1,
+    taper_profile: TaperProfile | None = None,
+    max_power_w: int = 0,
+    capacity_kwh: float = 0.0,
 ) -> list[dict[str, Any]]:
-    """Project a SoC series from *start* to *end*."""
+    """Project a SoC series from *start* to *end*.
+
+    When *taper_profile* is provided with *max_power_w* and *capacity_kwh*,
+    the effective power (and thus SoC rate) varies per SoC bucket based on
+    observed BMS charge/discharge acceptance ratios.
+    """
     points: list[dict[str, Any]] = []
     t = start
     cur_soc = soc
     step_secs = _FORECAST_STEP.total_seconds()
+    use_taper = taper_profile is not None and max_power_w > 0 and capacity_kwh > 0
     while t <= end:
         epoch_ms = int(t.timestamp() * 1000)
         if t <= now or (flat_until is not None and t < flat_until):
@@ -354,10 +375,19 @@ def project_soc_series(
             continue
         points.append({"time": epoch_ms, "soc": round(cur_soc, 1)})
         t += _FORECAST_STEP
-        if direction > 0:
-            cur_soc = min(cur_soc + rate_per_sec * step_secs, target)
+        if use_taper:
+            assert taper_profile is not None
+            if direction > 0:
+                ratio = taper_profile.charge_ratio(cur_soc)
+            else:
+                ratio = taper_profile.discharge_ratio(cur_soc)
+            effective_rate = power_to_soc_rate(max_power_w * ratio, capacity_kwh)
         else:
-            cur_soc = max(cur_soc - rate_per_sec * step_secs, target)
+            effective_rate = rate_per_sec
+        if direction > 0:
+            cur_soc = min(cur_soc + effective_rate * step_secs, target)
+        else:
+            cur_soc = max(cur_soc - effective_rate * step_secs, target)
     end_ms = int(end.timestamp() * 1000)
     if points and points[-1]["time"] < end_ms:
         points.append({"time": end_ms, "soc": round(cur_soc, 1)})
@@ -391,6 +421,7 @@ def build_forecast(
     """Build a SoC forecast series for active smart operations."""
     now = dt_util.now()
     capacity_kwh = get_battery_capacity_kwh(hass, domain)
+    taper = get_domain_data(hass, domain).taper_profile
 
     if cs is not None:
         soc = get_interpolated_soc(hass, domain)
@@ -405,6 +436,7 @@ def build_forecast(
         effectively_charging: bool = is_effectively_charging(hass, domain, cs)
 
         charge_rate = power_to_soc_rate(power_w, capacity_kwh)
+        forecast_power_w = power_w
 
         deferred_start: datetime.datetime | None = None
         if not effectively_charging and max_power_w > 0:
@@ -416,6 +448,7 @@ def build_forecast(
                 ds_calc = end - datetime.timedelta(hours=charge_hours)
                 deferred_start = ds_calc if ds_calc > now else now
             charge_rate = power_to_soc_rate(max_power_w * dpf, capacity_kwh)
+            forecast_power_w = int(max_power_w * dpf)
 
         return project_soc_series(
             session_start,
@@ -426,6 +459,9 @@ def build_forecast(
             target_soc,
             flat_until=deferred_start if not effectively_charging else None,
             direction=1,
+            taper_profile=taper,
+            max_power_w=forecast_power_w,
+            capacity_kwh=capacity_kwh,
         )
 
     if ds is not None:
@@ -464,6 +500,9 @@ def build_forecast(
             soc_floor,
             flat_until=discharge_start,
             direction=-1,
+            taper_profile=taper,
+            max_power_w=power_w,
+            capacity_kwh=capacity_kwh,
         )
 
     return []
@@ -627,6 +666,7 @@ class SmartOperationsOverviewSensor(RestoreSensor):
     _unrecorded_attributes = frozenset(
         {
             "charge_power_w",
+            "charge_effective_max_power_w",
             "charge_current_soc",
             "charge_confirmed_soc",
             "charge_remaining",
@@ -764,6 +804,9 @@ class SmartOperationsOverviewSensor(RestoreSensor):
                         or (cs.get("max_power_w", 0) if charging else 0)
                     ),
                     "charge_max_power_w": cs.get("max_power_w"),
+                    "charge_effective_max_power_w": cs.get(
+                        "effective_max_power_w", cs.get("max_power_w")
+                    ),
                     "charge_target_soc": cs.get("target_soc"),
                     "charge_current_soc": soc,
                     "charge_confirmed_soc": get_soc_value(self.hass, self._domain),
@@ -862,7 +905,17 @@ class SmartOperationsOverviewSensor(RestoreSensor):
         if remaining_h <= 0:
             return None
         capacity = get_battery_capacity_kwh(self.hass, self._domain)
-        taper = get_domain_data(self.hass, self._domain).taper_profile
+        dd = get_domain_data(self.hass, self._domain)
+        taper = dd.taper_profile
+        from .domain_data import get_first_coordinator
+
+        bms_temp: float | None = None
+        coordinator = get_first_coordinator(self.hass, self._domain)
+        if coordinator is not None and coordinator.data:
+            raw = coordinator.data.get("bmsBatteryTemperature")
+            if raw is not None:
+                with contextlib.suppress(ValueError, TypeError):
+                    bms_temp = float(raw)
         return is_charge_target_reachable(
             soc,
             cs.get("target_soc", 100),
@@ -870,6 +923,7 @@ class SmartOperationsOverviewSensor(RestoreSensor):
             remaining_h,
             cs.get("max_power_w", 0),
             taper_profile=taper,
+            bms_temp_c=bms_temp,
         )
 
 

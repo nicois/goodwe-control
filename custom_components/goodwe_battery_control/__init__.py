@@ -32,6 +32,11 @@ from .smart_battery.const import (
     SERVICE_SMART_DISCHARGE,
     STORAGE_VERSION,
 )
+from .smart_battery.domain_data import (
+    EntryData,
+    SmartBatteryDomainData,
+    get_domain_data,
+)
 from .smart_battery.services import register_services
 from .smart_battery.types import WorkMode
 
@@ -82,11 +87,11 @@ def _register_websocket_api(hass: HomeAssistant) -> None:
     ) -> None:
         """Return a role->entity_id mapping for goodwe_battery_control entities."""
         registry = er.async_get(hass)
+        dd = get_domain_data(hass, DOMAIN)
         entry_id: str | None = None
-        for key in hass.data.get(DOMAIN, {}):
-            if not str(key).startswith("_"):
-                entry_id = key
-                break
+        for eid in dd.entries:
+            entry_id = eid
+            break
 
         result: dict[str, str] = {}
         if entry_id is not None:
@@ -102,9 +107,8 @@ def _register_websocket_api(hass: HomeAssistant) -> None:
                     result[role] = suffix_map[suffix]
 
             # Also expose user-configured entities from the coordinator
-            domain_data = hass.data.get(DOMAIN, {})
-            entry_data = domain_data.get(entry_id, {})
-            coordinator = entry_data.get("coordinator")
+            ed = dd.entries.get(entry_id)
+            coordinator = ed.coordinator if ed else None
             if coordinator is not None:
                 emap = getattr(coordinator, "_entity_map", {})
                 role_from_key = {
@@ -113,9 +117,9 @@ def _register_websocket_api(hass: HomeAssistant) -> None:
                     "pv_power_entity": "solar_power",
                 }
                 for key, role in role_from_key.items():
-                    eid = emap.get(key)
-                    if eid:
-                        result[role] = eid
+                    entity_id = emap.get(key)
+                    if entity_id:
+                        result[role] = entity_id
 
         connection.send_result(msg["id"], result)
 
@@ -184,13 +188,11 @@ async def _register_card_frontend(hass: HomeAssistant) -> None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up GoodWe Battery Control from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN].setdefault("_smart_discharge_unsubs", [])
-    hass.data[DOMAIN].setdefault("_smart_charge_unsubs", [])
-    if "_store" not in hass.data[DOMAIN]:
-        hass.data[DOMAIN]["_store"] = Store[dict[str, Any]](
-            hass, STORAGE_VERSION, STORAGE_KEY
-        )
+    if DOMAIN not in hass.data:
+        dd = SmartBatteryDomainData()
+        dd.store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
+        hass.data[DOMAIN] = dd
+    dd = get_domain_data(hass, DOMAIN)
 
     entity_map = build_entity_map(entry.options)
     if not entity_map:
@@ -217,15 +219,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         max_power_w=max_power,
     )
 
-    hass.data[DOMAIN][entry.entry_id] = {
-        "coordinator": coordinator,
-        "adapter": adapter,
-        "entry": entry,
-    }
+    dd.entries[entry.entry_id] = EntryData(
+        coordinator=coordinator,
+        inverter=adapter,
+        entry=entry,
+    )
 
     # Register services, frontend card, and WS API once (first real entry)
-    real_entries = {k for k in hass.data[DOMAIN] if not k.startswith("_")}
-    if len(real_entries) == 1:
+    if len(dd.entries) == 1:
         register_services(hass, DOMAIN, adapter)
         _register_websocket_api(hass)
         await _register_card_frontend(hass)
@@ -246,10 +247,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
 
-    hass.data[DOMAIN].pop(entry.entry_id)
+    dd = get_domain_data(hass, DOMAIN)
+    dd.entries.pop(entry.entry_id, None)
 
-    remaining = {k for k in hass.data[DOMAIN] if not k.startswith("_")}
-    if not remaining:
+    if not dd.entries:
         from .smart_battery.listeners import cancel_smart_charge, cancel_smart_discharge
 
         cancel_smart_charge(hass, DOMAIN, clear_storage=False)

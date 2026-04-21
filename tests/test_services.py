@@ -20,6 +20,11 @@ from custom_components.goodwe_battery_control.const import (
     DEFAULT_GOODWE_INVERTER_POWER,
     DOMAIN,
 )
+from custom_components.goodwe_battery_control.smart_battery.domain_data import (
+    EntryData,
+    SmartBatteryDomainData,
+    get_domain_data,
+)
 from custom_components.goodwe_battery_control.smart_battery.services import (
     register_services,
 )
@@ -41,7 +46,9 @@ class TestSetupEntry:
         mock_store.async_load = AsyncMock(return_value={})
         mock_store.async_save = AsyncMock()
 
-        hass.data = {DOMAIN: {"_store": mock_store}}
+        dd = SmartBatteryDomainData()
+        dd.store = mock_store
+        hass.data = {DOMAIN: dd}
 
         entry = MagicMock()
         entry.entry_id = "entry1"
@@ -83,14 +90,13 @@ class TestSetupEntry:
         mock_store = MagicMock()
         mock_store.async_load = AsyncMock(return_value={})
         mock_store.async_save = AsyncMock()
-        hass.data = {
-            DOMAIN: {
-                "existing": {"adapter": MagicMock(), "coordinator": MagicMock()},
-                "_store": mock_store,
-                "_smart_discharge_unsubs": [],
-                "_smart_charge_unsubs": [],
-            }
-        }
+        dd = SmartBatteryDomainData()
+        dd.store = mock_store
+        dd.entries["existing"] = EntryData(
+            coordinator=MagicMock(),
+            inverter=MagicMock(),
+        )
+        hass.data = {DOMAIN: dd}
 
         entry = MagicMock()
         entry.entry_id = "entry2"
@@ -119,18 +125,16 @@ class TestSetupEntry:
     async def test_setup_fails_without_entity_map(self) -> None:
         """Setup should fail when no entity mappings are configured."""
         hass = MagicMock()
-        hass.data = {DOMAIN: {}}
+        dd = SmartBatteryDomainData()
+        mock_store = MagicMock()
+        mock_store.async_load = AsyncMock(return_value={})
+        dd.store = mock_store
+        hass.data = {DOMAIN: dd}
 
         entry = MagicMock()
         entry.entry_id = "entry1"
         entry.data = {}
         entry.options = {}  # No work mode entity → empty entity map
-
-        mock_store = MagicMock()
-        mock_store.async_load = AsyncMock(return_value={})
-        hass.data[DOMAIN]["_store"] = mock_store
-        hass.data[DOMAIN]["_smart_discharge_unsubs"] = []
-        hass.data[DOMAIN]["_smart_charge_unsubs"] = []
 
         assert await async_setup_entry(hass, entry) is False
 
@@ -142,13 +146,12 @@ class TestUnloadEntry:
     async def test_unload_last_entry_removes_services(self) -> None:
         hass = MagicMock()
         hass.config_entries.async_unload_platforms = AsyncMock()
-        hass.data = {
-            DOMAIN: {
-                "entry1": {"adapter": MagicMock(), "coordinator": MagicMock()},
-                "_smart_discharge_unsubs": [],
-                "_smart_charge_unsubs": [],
-            }
-        }
+        dd = SmartBatteryDomainData()
+        dd.entries["entry1"] = EntryData(
+            coordinator=MagicMock(),
+            inverter=MagicMock(),
+        )
+        hass.data = {DOMAIN: dd}
 
         entry = MagicMock()
         entry.entry_id = "entry1"
@@ -164,14 +167,10 @@ class TestUnloadEntry:
     async def test_unload_non_last_entry_keeps_services(self) -> None:
         hass = MagicMock()
         hass.config_entries.async_unload_platforms = AsyncMock()
-        hass.data = {
-            DOMAIN: {
-                "entry1": {"adapter": MagicMock()},
-                "entry2": {"adapter": MagicMock()},
-                "_smart_discharge_unsubs": [],
-                "_smart_charge_unsubs": [],
-            }
-        }
+        dd = SmartBatteryDomainData()
+        dd.entries["entry1"] = EntryData(inverter=MagicMock())
+        dd.entries["entry2"] = EntryData(inverter=MagicMock())
+        hass.data = {DOMAIN: dd}
 
         entry = MagicMock()
         entry.entry_id = "entry1"
@@ -189,7 +188,8 @@ class TestClearOverrides:
     @pytest.mark.asyncio
     async def test_clear_overrides_reverts_to_self_use(self) -> None:
         hass = make_hass()
-        register_services(hass, DOMAIN, hass.data[DOMAIN]["entry1"]["adapter"])
+        dd = get_domain_data(hass, DOMAIN)
+        register_services(hass, DOMAIN, dd.entries["entry1"].inverter)
 
         handler = hass.services.async_register.call_args_list[0].args[2]
         await handler(make_call({}))
@@ -210,7 +210,8 @@ class TestSmartChargeSetup:
             coordinator_data={"SoC": 30.0},
             battery_capacity_kwh=10.0,
         )
-        register_services(hass, DOMAIN, hass.data[DOMAIN]["entry1"]["adapter"])
+        dd = get_domain_data(hass, DOMAIN)
+        register_services(hass, DOMAIN, dd.entries["entry1"].inverter)
 
         handler = hass.services.async_register.call_args_list[4].args[2]
         with patch(
@@ -229,7 +230,7 @@ class TestSmartChargeSetup:
                 )
             )
 
-        state = hass.data[DOMAIN].get("_smart_charge_state")
+        state = dd.smart_charge_state
         assert state is not None
         assert state["target_soc"] == 80
 
@@ -239,7 +240,8 @@ class TestSmartChargeSetup:
             coordinator_data={"SoC": 30.0},
             battery_capacity_kwh=10.0,
         )
-        register_services(hass, DOMAIN, hass.data[DOMAIN]["entry1"]["adapter"])
+        dd = get_domain_data(hass, DOMAIN)
+        register_services(hass, DOMAIN, dd.entries["entry1"].inverter)
 
         handler = hass.services.async_register.call_args_list[4].args[2]
         with patch(
@@ -258,8 +260,7 @@ class TestSmartChargeSetup:
                 )
             )
 
-        unsubs = hass.data[DOMAIN]["_smart_charge_unsubs"]
-        assert len(unsubs) >= 2
+        assert len(dd.smart_charge_unsubs) >= 2
 
 
 class TestSmartDischargeSetup:
@@ -271,7 +272,8 @@ class TestSmartDischargeSetup:
             coordinator_data={"SoC": 80.0},
             battery_capacity_kwh=10.0,
         )
-        register_services(hass, DOMAIN, hass.data[DOMAIN]["entry1"]["adapter"])
+        dd = get_domain_data(hass, DOMAIN)
+        register_services(hass, DOMAIN, dd.entries["entry1"].inverter)
 
         handler = hass.services.async_register.call_args_list[5].args[2]
         with patch(
@@ -290,7 +292,7 @@ class TestSmartDischargeSetup:
                 )
             )
 
-        state = hass.data[DOMAIN].get("_smart_discharge_state")
+        state = dd.smart_discharge_state
         assert state is not None
         assert state["min_soc"] == 30
 
@@ -301,7 +303,8 @@ class TestSmartDischargeSetup:
             coordinator_data={"SoC": 80.0},
             battery_capacity_kwh=10.0,
         )
-        register_services(hass, DOMAIN, hass.data[DOMAIN]["entry1"]["adapter"])
+        dd = get_domain_data(hass, DOMAIN)
+        register_services(hass, DOMAIN, dd.entries["entry1"].inverter)
 
         handler = hass.services.async_register.call_args_list[5].args[2]
         with patch(
@@ -320,5 +323,6 @@ class TestSmartDischargeSetup:
                 )
             )
 
-        state = hass.data[DOMAIN]["_smart_discharge_state"]
+        state = dd.smart_discharge_state
+        assert state is not None
         assert state["max_power_w"] == DEFAULT_GOODWE_INVERTER_POWER

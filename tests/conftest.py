@@ -25,6 +25,10 @@ from custom_components.goodwe_battery_control.const import (
     DOMAIN,
 )
 from custom_components.goodwe_battery_control.smart_battery.adapter import EntityAdapter
+from custom_components.goodwe_battery_control.smart_battery.domain_data import (
+    EntryData,
+    SmartBatteryDomainData,
+)
 from custom_components.goodwe_battery_control.smart_battery.types import WorkMode
 
 # GoodWe mode map — must match __init__.py
@@ -106,18 +110,14 @@ def make_hass(
         CONF_SMART_HEADROOM: smart_headroom,
     }
 
-    hass.data = {
-        DOMAIN: {
-            entry_id: {
-                "adapter": adapter,
-                "coordinator": mock_coordinator,
-                "entry": mock_entry,
-            },
-            "_smart_discharge_unsubs": [],
-            "_smart_charge_unsubs": [],
-            "_store": mock_store,
-        }
-    }
+    dd = SmartBatteryDomainData()
+    dd.store = mock_store
+    dd.entries[entry_id] = EntryData(
+        coordinator=mock_coordinator,
+        inverter=adapter,
+        entry=mock_entry,
+    )
+    hass.data = {DOMAIN: dd}
 
     hass.config_entries.async_get_entry = MagicMock(return_value=mock_entry)
 
