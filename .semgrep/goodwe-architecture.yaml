@@ -1,0 +1,15 @@
+rules:
+  # C-021: smart_battery/ must not import from brand-specific modules.
+  - id: no-brand-imports-in-smart-battery
+    pattern-regex: >-
+      (?:from\s+custom_components\.goodwe_battery_control\.(?:coordinator|config_flow)\b|import\s+custom_components\.goodwe_battery_control\.(?:coordinator|config_flow)\b)
+    paths:
+      include:
+        - "**/smart_battery/"
+        - "**/custom_components/goodwe_battery_control/smart_battery/"
+    message: >
+      smart_battery/ must not import from brand-specific modules (C-021).
+      This package is brand-agnostic — move brand-specific logic to the
+      integration layer or pass it via the InverterAdapter protocol.
+    languages: [regex]
+    severity: ERROR

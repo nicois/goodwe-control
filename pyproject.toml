@@ -18,6 +18,7 @@ dev = [
     "homeassistant",
     "voluptuous",
     "pyyaml>=6.0",
+    "types-requests",
 ]
 
 [tool.setuptools.packages.find]
@@ -25,6 +26,9 @@ where = ["."]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: end-to-end tests requiring HA container (run with pytest -m slow)",
+]
 
 [tool.mypy]
 strict = true
@@ -49,4 +53,7 @@ disable_error_code = ["method-assign"]
 extend-exclude = ["*.json", "*.md"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "TCH"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "TCH", "S110", "S112", "BLE001", "B904"]
+
+[tool.ruff.lint.per-file-ignores]
+"custom_components/**" = ["BLE001"]
