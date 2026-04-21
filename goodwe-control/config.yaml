@@ -1,0 +1,21 @@
+name: GoodWe Battery Control
+description: >-
+  Installs the GoodWe Battery Control custom integration into Home Assistant.
+  Manages battery charge/discharge via GoodWe inverter entities.
+version: 1.0.2-beta.1
+slug: goodwe_battery_control
+url: https://github.com/nicois/goodwe-control
+image: ghcr.io/nicois/goodwe-control-{arch}
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+startup: once
+boot: auto
+map:
+  - config:rw
+apparmor: true
+options: {}
+schema: {}
